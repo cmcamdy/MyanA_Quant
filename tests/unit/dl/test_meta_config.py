@@ -16,7 +16,7 @@ class TestMetaConfig:
         config = MetaConfig()
         assert config.window == 20
         assert config.horizon == 1
-        assert config.hidden_dim == 32
+        assert config.hidden_dim == 64
         assert config.num_strategies == 0
 
     def test_with_strategies(self):

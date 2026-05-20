@@ -68,9 +68,13 @@ class MetaStrategy(Strategy):
         self._collector = MetaSignalCollector(self.config)
         self._collector.load_scaler(str(scaler_path))
 
-        # 加载模型
+        # 加载模型 (通道数 = 策略数 + 3个市场特征)
+        num_channels = self.config.num_strategies + 3
+        prior = self.config.strategy_prior
+        if prior is not None:
+            prior = list(prior) + [1.0, 1.0, 1.0]  # 市场特征均匀先验
         self._model = MetaModel(
-            num_strategies=self.config.num_strategies,
+            num_strategies=num_channels,
             window=self.config.window,
             hidden_dim=self.config.hidden_dim,
             dropout=self.config.dropout,
@@ -105,21 +109,45 @@ class MetaStrategy(Strategy):
         # 运行每个子策略的 score()
         step_scores = [strat.score(context) for strat in self.strategies]
 
-        # 记录到历史
-        self._score_history.append(step_scores)
+        # 市场上下文特征
+        close = context.bar.get('close')
+        volume = context.bar.get('volume')
+        if close is not None and len(context.bars) >= 2:
+            prev_close = context.bars['close'].iloc[-2]
+            ret_1d = (close - prev_close) / prev_close if prev_close > 0 else 0.0
+        else:
+            ret_1d = 0.0
+
+        if close is not None and len(context.bars) >= 6:
+            close_5d = context.bars['close'].iloc[-6]
+            ret_5d = (close - close_5d) / close_5d if close_5d > 0 else 0.0
+        else:
+            ret_5d = 0.0
+
+        if volume is not None and len(context.bars) >= 2:
+            prev_vol = context.bars['volume'].iloc[-2]
+            vol_chg = (volume - prev_vol) / prev_vol if prev_vol > 0 else 0.0
+            vol_chg = max(-1.0, min(5.0, vol_chg))
+        else:
+            vol_chg = 0.0
+
+        # 记录到历史 (策略分数 + 市场特征)
+        step_row = step_scores + [ret_1d, ret_5d, vol_chg]
+        self._score_history.append(step_row)
 
         # 窗口不足则不产生信号
         if len(self._score_history) < self.config.window:
             return None
 
-        # 构建特征: [K, window]
+        # 构建特征: [K+3, window]
         K = len(self.strategies)
+        total_channels = K + 3
         window = self.config.window
-        features = np.zeros((K, window), dtype=np.float32)
+        features = np.zeros((total_channels, window), dtype=np.float32)
 
-        for t, scores in enumerate(self._score_history):
-            for j, score in enumerate(scores):
-                features[j, t] = score
+        for t, row in enumerate(self._score_history):
+            for j, val in enumerate(row):
+                features[j, t] = val
 
         # 标准化
         features = self._collector.normalize_features(features[np.newaxis], fit=False)[0]

@@ -20,13 +20,13 @@ class TestMetaTrainer:
         strategies = [MACrossStrategy(), SARStrategy()]
         config = MetaConfig(strategies=strategies, window=10)
         trainer = MetaTrainer(config)
-        model = trainer._create_model()
+        # 2 strategies + 3 market features = 5 channels
+        model = trainer._create_model(num_channels=5)
         assert isinstance(model, torch.nn.Module)
-        # 2 strategies, window=10
-        x = torch.randn(1, 2, 10)
+        x = torch.randn(1, 5, 10)
         pred, weights = model(x)
         assert pred.shape == (1,)
-        assert weights.shape == (1, 2)
+        assert weights.shape == (1, 5)
 
     def test_create_criterion(self):
         from dl.meta_trainer import _create_criterion

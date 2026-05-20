@@ -22,7 +22,7 @@ class MetaConfig:
     val_ratio: float = 0.15
 
     # 模型
-    hidden_dim: int = 32
+    hidden_dim: int = 64
     dropout: float = 0.1
 
     # 训练

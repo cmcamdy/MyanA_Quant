@@ -34,7 +34,7 @@ class MetaSignalCollector:
             symbol: 标的代码
 
         Returns:
-            DataFrame 包含 strat_0 ~ strat_{K-1} 列 (连续分数) + close 列
+            DataFrame 包含 strat_0 ~ strat_{K-1} 列 + mkt_* 市场上下文列 + close/volume 列
         """
         K = len(self.strategies)
 
@@ -60,6 +60,14 @@ class MetaSignalCollector:
 
         df_with_ind = iset.compute(df) if iset.specs else df.copy()
 
+        # 预计算市场上下文特征
+        close = df_with_ind['close']
+        volume = df_with_ind['volume']
+        ret_1d = close.pct_change(1).fillna(0.0)
+        ret_5d = close.pct_change(5).fillna(0.0)
+        vol_change = volume.pct_change(1).fillna(0.0)
+        vol_change = vol_change.clip(-1, 5)  # 限制极端值
+
         # 3. 逐 bar 采集分数
         score_records = []
         for i in range(len(df_with_ind)):
@@ -77,10 +85,15 @@ class MetaSignalCollector:
             record = {}
             for j, strat in enumerate(self.strategies):
                 record[f'strat_{j}'] = strat.score(ctx)
+            # 市场上下文特征
+            record['mkt_ret1d'] = ret_1d.iloc[i]
+            record['mkt_ret5d'] = ret_5d.iloc[i]
+            record['mkt_volchg'] = vol_change.iloc[i]
             score_records.append(record)
 
         scores_df = pd.DataFrame(score_records, index=df_with_ind.index)
-        scores_df['close'] = df_with_ind['close'].values
+        scores_df['close'] = close.values
+        scores_df['volume'] = volume.values
 
         return scores_df
 
@@ -94,7 +107,8 @@ class MetaSignalCollector:
         """构建单只股票的样本
 
         Returns:
-            (features: [N, K, window], labels: [N]) 或 None
+            (features: [N, K+M, window], labels: [N]) 或 None
+            K=策略数, M=市场特征数(3: ret1d, ret5d, volchg)
         """
         df = self._load_parquet(symbol)
         if df is None:
@@ -114,20 +128,22 @@ class MetaSignalCollector:
             logger.warning(f"{symbol}: 数据不足")
             return None
 
-        # 特征列: strat_0 ~ strat_{K-1}
+        # 特征列: strat_0 ~ strat_{K-1} + mkt_ret1d, mkt_ret5d, mkt_volchg
         K = len(self.strategies)
-        feature_cols = [f'strat_{j}' for j in range(K)]
+        mkt_cols = ['mkt_ret1d', 'mkt_ret5d', 'mkt_volchg']
+        feature_cols = [f'strat_{j}' for j in range(K)] + mkt_cols
 
         values = scores_df[feature_cols].fillna(0.0).values.astype(np.float32)
         close = scores_df['close']
         labels = self._make_labels(close)
 
         window = self.config.window
+        total_channels = K + len(mkt_cols)
         n_samples = len(values) - window - self.config.horizon + 1
         if n_samples <= 0:
             return None
 
-        features = np.zeros((n_samples, K, window), dtype=np.float32)
+        features = np.zeros((n_samples, total_channels, window), dtype=np.float32)
         valid_labels = np.zeros(n_samples, dtype=np.float32)
 
         for i in range(n_samples):

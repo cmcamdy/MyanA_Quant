@@ -42,13 +42,29 @@ class MetaTrainer:
         self._best_val_loss = float('inf')
         self._last_attn_weights: Optional[np.ndarray] = None
 
-    def _create_model(self) -> MetaModel:
+    NUM_MKT_FEATURES = 3  # ret1d, ret5d, volchg
+
+    def _create_model(self, num_channels: Optional[int] = None) -> MetaModel:
+        """创建模型
+
+        Args:
+            num_channels: 总通道数 (策略+市场特征), 默认 num_strategies + 3
+        """
+        if num_channels is None:
+            num_channels = self.config.num_strategies + self.NUM_MKT_FEATURES
+
+        # 先验偏置: 策略通道用用户指定先验, 市场特征通道用均匀
+        prior = self.config.strategy_prior
+        if prior is not None:
+            mkt_prior = [1.0] * self.NUM_MKT_FEATURES
+            prior = list(prior) + mkt_prior
+
         model = MetaModel(
-            num_strategies=self.config.num_strategies,
+            num_strategies=num_channels,
             window=self.config.window,
             hidden_dim=self.config.hidden_dim,
             dropout=self.config.dropout,
-            strategy_prior=self.config.strategy_prior,
+            strategy_prior=prior,
         )
         return model.to(self.device)
 
@@ -139,10 +155,14 @@ class MetaTrainer:
         train_loader = DataLoader(train_ds, batch_size=self.config.batch_size, shuffle=True)
         val_loader = DataLoader(val_ds, batch_size=self.config.batch_size)
 
-        # 模型
-        self.model = self._create_model()
+        # 模型 (通道数 = 策略数 + 市场特征数)
+        num_channels = features.shape[1]
+        self.model = self._create_model(num_channels=num_channels)
         criterion = _create_criterion(self.config.loss_type, self.config.huber_delta)
         optimizer = torch.optim.Adam(self.model.parameters(), lr=self.config.learning_rate)
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer, mode='min', factor=0.5, patience=5, min_lr=1e-6,
+        )
 
         start_epoch = 0
         if self.config.resume:
@@ -165,7 +185,9 @@ class MetaTrainer:
             val_pbar.close()
 
             epoch_pbar.set_postfix(t_loss=f"{train_loss:.6f}", v_loss=f"{val_loss:.6f}")
-            logger.info(f"Epoch {epoch+1}/{self.config.epochs} | train={train_loss:.6f} | val={val_loss:.6f}")
+            logger.info(f"Epoch {epoch+1}/{self.config.epochs} | train={train_loss:.6f} | val={val_loss:.6f} | lr={optimizer.param_groups[0]['lr']:.2e}")
+
+            scheduler.step(val_loss)
 
             if val_loss < self._best_val_loss:
                 self._best_val_loss = val_loss
