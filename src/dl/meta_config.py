@@ -43,8 +43,8 @@ class MetaConfig:
     buy_threshold: float = 0.002
     sell_threshold: float = -0.002
     adaptive_window: int = 60     # 自适应信号的历史窗口
-    buy_percentile: float = 0.8   # 预测值高于历史 80% 分位则买入
-    sell_percentile: float = 0.2  # 预测值低于历史 20% 分位则卖出
+    buy_percentile: float = 0.7   # 预测值高于历史 70% 分位则买入
+    sell_percentile: float = 0.3  # 预测值低于历史 30% 分位则卖出
 
     @property
     def num_strategies(self) -> int:
