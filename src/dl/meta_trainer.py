@@ -48,6 +48,7 @@ class MetaTrainer:
             window=self.config.window,
             hidden_dim=self.config.hidden_dim,
             dropout=self.config.dropout,
+            strategy_prior=self.config.strategy_prior,
         )
         return model.to(self.device)
 

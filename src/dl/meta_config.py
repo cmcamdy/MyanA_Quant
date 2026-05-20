@@ -10,6 +10,7 @@ from strategies.base import Strategy
 class MetaConfig:
     # 子策略列表
     strategies: List[Strategy] = field(default_factory=list)
+    strategy_prior: Optional[List[float]] = None  # 策略先验权重, 如 [0.3, 0.2, 0.25, 0.25], 归一化后用于初始化
 
     # 数据
     data_dir: str = "./data"

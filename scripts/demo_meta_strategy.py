@@ -53,6 +53,25 @@ def build_strategies():
     ]
 
 
+def build_strategy_prior():
+    """策略先验权重: 用户根据经验设定，模型训练后可调整
+
+    顺序与 build_strategies() 一一对应。
+    值越大 → 初始注意力权重越高。
+    不设置或全1则退化为均匀初始化。
+    """
+    return [
+        # MA, SAR, RSI, Bollinger — 经典策略，先验较高
+        3, 2, 2, 2,
+        # MACD — 趋势确认利器，先验最高
+        4,
+        # KDJ, WR, CCI — 动量类，中等
+        1.5, 1.5, 1.5,
+        # Keltner, OBV, MFI, VWAP — 辅助参考
+        1, 1, 1, 1,
+    ]
+
+
 def get_symbols_by_industry(industry_name: str) -> list:
     from data.industry import IndustryLookup
     lk = IndustryLookup(str(PROJECT_ROOT / "data"))
@@ -65,11 +84,13 @@ def get_symbols_by_industry(industry_name: str) -> list:
 
 def run_train(args):
     strategies = build_strategies()
+    strategy_prior = build_strategy_prior()
     symbols = get_symbols_by_industry(args.industry)
     logger.info(f"行业 '{args.industry}' 共 {len(symbols)} 只股票")
 
     config = MetaConfig(
         strategies=strategies,
+        strategy_prior=strategy_prior,
         data_dir=str(PROJECT_ROOT / "data"),
         checkpoint_dir=str(PROJECT_ROOT / "checkpoints" / "meta"),
         start_date=args.start_date,
@@ -86,6 +107,8 @@ def run_train(args):
     logger.info("=" * 60)
     logger.info("Meta Strategy: 学习型组合策略")
     logger.info(f"子策略: {[type(s).__name__ for s in strategies]}")
+    if strategy_prior:
+        logger.info(f"先验权重: {dict(zip([type(s).__name__ for s in strategies], strategy_prior))}")
     logger.info(f"数据范围: {config.start_date or '最早'} ~ {config.end_date or '最新'}")
     logger.info(f"窗口: {config.window}, 预测周期: {config.horizon}, patience: {config.early_stopping_patience}")
     logger.info("=" * 60)
@@ -114,10 +137,12 @@ def run_backtest(args):
     from strategies.engine import BacktestEngine, BacktestConfig
 
     strategies = build_strategies()
+    strategy_prior = build_strategy_prior()
     symbols = get_symbols_by_industry(args.industry)
 
     config = MetaConfig(
         strategies=strategies,
+        strategy_prior=strategy_prior,
         data_dir=str(PROJECT_ROOT / "data"),
         checkpoint_dir=str(PROJECT_ROOT / "checkpoints" / "meta"),
         start_date=args.start_date,

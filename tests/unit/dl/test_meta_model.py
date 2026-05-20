@@ -68,3 +68,28 @@ class TestMetaModel:
             out2, w2 = model(x)
         assert torch.allclose(out1, out2)
         assert torch.allclose(w1, w2)
+
+    def test_strategy_prior_initialization(self):
+        """先验权重应影响初始注意力分布"""
+        prior = [4, 2, 2, 1]
+        model_with_prior = MetaModel(num_strategies=4, window=20, hidden_dim=32, strategy_prior=prior)
+        model_uniform = MetaModel(num_strategies=4, window=20, hidden_dim=32)
+
+        model_with_prior.eval()
+        model_uniform.eval()
+
+        x = torch.randn(1, 4, 20)
+        with torch.no_grad():
+            _, weights_prior = model_with_prior(x)
+            _, weights_uniform = model_uniform(x)
+
+        # 有先验的模型, 高先验策略的权重应倾向更高
+        # 这里只验证模型能正常工作，具体权重取决于训练
+        assert weights_prior.shape == (1, 4)
+        assert not torch.isnan(weights_prior).any()
+
+        # 验证嵌入被缩放: 有先验时嵌入范数不同
+        emb_prior = model_with_prior.strategy_embedding.weight
+        norms_prior = emb_prior.norm(dim=1)
+        # MACD(prior=4) 的嵌入范数应大于 VWAP(prior=1)
+        assert norms_prior[0] > norms_prior[3]

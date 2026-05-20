@@ -8,6 +8,9 @@
   注意力权重可直接解读为各策略的相对重要性。
 """
 
+from typing import Optional
+
+import numpy as np
 import torch
 import torch.nn as nn
 
@@ -20,6 +23,9 @@ class MetaModel(nn.Module):
 
     输出: (pred: [B], attn_weights: [B, num_strategies])
       pred 为预测收益率, attn_weights 为各策略注意力权重
+
+    strategy_prior: 可选的策略先验权重，用于初始化策略嵌入幅度，
+      让高先验策略的嵌入更大，自然吸引更多注意力。
     """
 
     def __init__(
@@ -28,6 +34,7 @@ class MetaModel(nn.Module):
         window: int = 20,
         hidden_dim: int = 32,
         dropout: float = 0.1,
+        strategy_prior: Optional[list] = None,
     ):
         super().__init__()
         self.num_strategies = num_strategies
@@ -47,6 +54,14 @@ class MetaModel(nn.Module):
 
         # 策略嵌入: 为每个策略提供可学习的身份向量，打破对称性
         self.strategy_embedding = nn.Embedding(num_strategies, hidden_dim)
+        if strategy_prior is not None:
+            # 用先验权重缩放嵌入初始化幅度: 高先验 → 更大嵌入 → 更高注意力
+            prior = np.array(strategy_prior, dtype=np.float32)
+            prior = prior / prior.sum()  # 归一化
+            scale = (prior * num_strategies) ** 0.5  # 均值=1, 高先验>1, 低先验<1
+            with torch.no_grad():
+                for i in range(num_strategies):
+                    self.strategy_embedding.weight[i] *= scale[i]
 
         # 策略注意力: 可学习的 query 在 K 个策略上做 attention
         self.attn_query = nn.Parameter(torch.randn(1, 1, hidden_dim) * 0.02)
