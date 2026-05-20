@@ -16,5 +16,7 @@ setup(
         "akshare>=1.11.0",
         "pyyaml>=6.0",
         "requests>=2.31.0",
+        "streamlit>=1.30.0",
+        "aiohttp>=3.9.0",
     ],
 )

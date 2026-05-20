@@ -65,6 +65,8 @@ MyanAQuant/
 │       ├── candlestick.py        # K线图 + 指标叠加 + 买卖点标注
 │       ├── equity.py             # 权益曲线 + 回撤图
 │       └── trade.py              # 交易盈亏柱状图 + 持有期散点图
+├── web/                          # Web应用
+│   └── app.py                    # Streamlit五维选股可视化系统
 ├── scripts/                      # 脚本
 │   ├── download_daily.py         # A股日线批量下载脚本
 │   ├── download_industry_stock.py # 行业-股票映射下载脚本
@@ -369,6 +371,18 @@ print(f"技术={result.tech_score}/30 估值={result.valuation_score}/25 "
 
 > 详细文档: [docs/stock_selection.md](docs/stock_selection.md)
 
+### 五维选股可视化
+
+```bash
+# 安装 Web 依赖
+pip install streamlit aiohttp
+
+# 启动可视化系统
+streamlit run web/app.py
+```
+
+支持沪深300/A股全量/港股通批量筛选、单股评分、五维雷达图、评级分布等可视化。
+
 ## 模块说明
 
 ### 数据获取模块 (`src/data/`)
@@ -571,7 +585,7 @@ logging:
 - **数据分析**: Pandas, NumPy
 - **深度学习**: PyTorch (Transformer Decoder, Conv1D + Attention)
 - **异步并发**: aiohttp (五维选股, 3秒/300只)
-- **可视化**: Matplotlib, Plotly
+- **可视化**: Matplotlib, Plotly, Streamlit
 - **存储**: Parquet
 - **回测**: 自研回测引擎（向量化指标 + 逐 bar 信号）
 
