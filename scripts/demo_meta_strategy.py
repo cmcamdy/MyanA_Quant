@@ -1,0 +1,199 @@
+#!/usr/bin/env python3
+"""Meta Strategy Demo: 学习型组合策略
+
+用法:
+    python3 scripts/demo_meta_strategy.py
+    python3 scripts/demo_meta_strategy.py --backtest
+"""
+
+import argparse
+import logging
+import sys
+from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(PROJECT_ROOT / "src"))
+
+from dl.meta_config import MetaConfig
+from dl.meta_trainer import MetaTrainer
+
+LOG_FORMAT = "%(asctime)s [%(levelname)s] %(message)s"
+logging.basicConfig(level=logging.INFO, format=LOG_FORMAT)
+logger = logging.getLogger("demo_meta")
+
+
+def build_strategies():
+    """构建子策略组合"""
+    from strategies.examples.ma_cross import MACrossStrategy
+    from strategies.examples.sar import SARStrategy
+    from strategies.examples.rsi import RSIStrategy
+    from strategies.examples.bollinger import BollingerStrategy
+    from strategies.examples.macd import MACDStrategy
+    from strategies.examples.kdj import KDJStrategy
+    from strategies.examples.wr import WRStrategy
+    from strategies.examples.cci import CCIStrategy
+    from strategies.examples.keltner import KeltnerStrategy
+    from strategies.examples.obv import OBVStrategy
+    from strategies.examples.mfi import MFIStrategy
+    from strategies.examples.vwap import VWAPStrategy
+
+    return [
+        MACrossStrategy(fast_period=5, slow_period=20),
+        SARStrategy(),
+        RSIStrategy(period=14, oversold=30, overbought=70),
+        BollingerStrategy(period=20),
+        MACDStrategy(fast_period=12, slow_period=26, signal_period=9),
+        KDJStrategy(n=9, m1=3, m2=3, oversold=20, overbought=80),
+        WRStrategy(period=14, oversold=-80, overbought=-20),
+        CCIStrategy(period=14, oversold=-100, overbought=100),
+        KeltnerStrategy(ema_period=20, atr_period=10, num_atr=1.5),
+        OBVStrategy(ma_period=20),
+        MFIStrategy(period=14, oversold=20, overbought=80),
+        VWAPStrategy(),
+    ]
+
+
+def get_symbols_by_industry(industry_name: str) -> list:
+    from data.industry import IndustryLookup
+    lk = IndustryLookup(str(PROJECT_ROOT / "data"))
+    symbols = lk.get_stocks(industry_name)
+    if not symbols:
+        logger.error(f"行业 '{industry_name}' 未找到或无股票")
+        sys.exit(1)
+    return symbols
+
+
+def run_train(args):
+    strategies = build_strategies()
+    symbols = get_symbols_by_industry(args.industry)
+    logger.info(f"行业 '{args.industry}' 共 {len(symbols)} 只股票")
+
+    config = MetaConfig(
+        strategies=strategies,
+        data_dir=str(PROJECT_ROOT / "data"),
+        checkpoint_dir=str(PROJECT_ROOT / "checkpoints" / "meta"),
+        start_date=args.start_date,
+        end_date=args.end_date,
+        window=args.window,
+        horizon=args.horizon,
+        hidden_dim=32,
+        epochs=args.epochs,
+        batch_size=32,
+        loss_type=args.loss,
+        early_stopping_patience=10,
+    )
+
+    logger.info("=" * 60)
+    logger.info("Meta Strategy: 学习型组合策略")
+    logger.info(f"子策略: {[type(s).__name__ for s in strategies]}")
+    logger.info(f"数据范围: {config.start_date or '最早'} ~ {config.end_date or '最新'}")
+    logger.info(f"窗口: {config.window}, 预测周期: {config.horizon}, patience: {config.early_stopping_patience}")
+    logger.info("=" * 60)
+
+    # 训练
+    trainer = MetaTrainer(config)
+    trainer.train(symbols)
+
+    # 评估
+    logger.info("\n--- 回归评估 ---")
+    result = trainer.evaluate(symbols)
+    print(f"\n测试集 MSE: {result['mse']:.6f}")
+    print(f"测试集 RMSE: {result['rmse']:.6f}")
+    print(f"方向准确率: {result['direction_accuracy']:.4f}")
+    print(f"相关系数: {result['correlation']:.4f}")
+    print(f"\n策略权重:")
+    for i, strat in enumerate(strategies):
+        w = result['avg_strategy_weights'][i]
+        bar = "#" * int(w * 50)
+        print(f"  {type(strat).__name__:20s}: {w:.4f} {bar}")
+
+
+def run_backtest(args):
+    from data.storage import ParquetStorage
+    from dl.meta_strategy import MetaStrategy
+    from strategies.engine import BacktestEngine, BacktestConfig
+
+    strategies = build_strategies()
+    symbols = get_symbols_by_industry(args.industry)
+
+    config = MetaConfig(
+        strategies=strategies,
+        data_dir=str(PROJECT_ROOT / "data"),
+        checkpoint_dir=str(PROJECT_ROOT / "checkpoints" / "meta"),
+        start_date=args.start_date,
+        end_date=args.end_date,
+        window=args.window,
+        horizon=args.horizon,
+        hidden_dim=32,
+        epochs=args.epochs,
+        batch_size=32,
+        loss_type=args.loss,
+        early_stopping_patience=10,
+        buy_threshold=args.buy_threshold,
+        sell_threshold=args.sell_threshold,
+    )
+
+    # 先训练
+    trainer = MetaTrainer(config)
+    logger.info("--- 训练 Meta 模型 ---")
+    trainer.train(symbols)
+
+    # 选股票回测
+    storage = ParquetStorage(str(PROJECT_ROOT / "data"))
+    test_symbol = None
+    for sym in symbols:
+        df = storage.load(sym, '1d')
+        if df is not None and len(df) > config.window + 60:
+            test_symbol = sym
+            break
+
+    if test_symbol is None:
+        logger.error("没有找到足够数据的股票用于回测")
+        return
+
+    logger.info(f"\n--- 回测: {test_symbol} ---")
+    df = storage.load(test_symbol, '1d')
+
+    meta = MetaStrategy(config)
+    bt_config = BacktestConfig.from_yaml(str(PROJECT_ROOT / "config" / "settings.yaml"))
+    engine = BacktestEngine(config=bt_config)
+    result = engine.run(meta, df, symbol=test_symbol)
+
+    print(f"\n{'='*40}")
+    print(f"Meta Strategy 回测结果: {test_symbol}")
+    print(f"{'='*40}")
+    print(f"总收益率:   {result.total_return:.2%}")
+    print(f"年化收益率: {result.annual_return:.2%}")
+    print(f"夏普比率:   {result.sharpe_ratio:.2f}")
+    print(f"最大回撤:   {result.max_drawdown:.2%}")
+    print(f"胜率:       {result.win_rate:.2%}")
+    print(f"盈亏比:     {result.profit_loss_ratio:.2f}")
+    print(f"交易次数:   {result.total_trades}")
+
+
+def main():
+    parser = argparse.ArgumentParser(description='Meta Strategy: 学习型组合策略')
+    parser.add_argument('--industry', type=str, default='C32有色金属冶炼和压延加工业')
+    parser.add_argument('--epochs', type=int, default=100)
+    parser.add_argument('--window', type=int, default=20)
+    parser.add_argument('--horizon', type=int, default=1)
+    parser.add_argument('--loss', type=str, default='huber', choices=['mse', 'mae', 'huber'])
+    parser.add_argument('--start-date', type=str, default=None,
+                        help='数据起始日期 (如 2013-01-01)')
+    parser.add_argument('--end-date', type=str, default=None,
+                        help='数据截止日期 (如 2026-01-01)')
+    parser.add_argument('--buy-threshold', type=float, default=0.002,
+                        help='买入阈值 (预测收益率超过此值则买入, 默认0.002=0.2%%)')
+    parser.add_argument('--sell-threshold', type=float, default=-0.002,
+                        help='卖出阈值 (预测收益率低于此值则卖出, 默认-0.002=-0.2%%)')
+    parser.add_argument('--backtest', action='store_true')
+    args = parser.parse_args()
+
+    if args.backtest:
+        run_backtest(args)
+    else:
+        run_train(args)
+
+
+if __name__ == "__main__":
+    main()

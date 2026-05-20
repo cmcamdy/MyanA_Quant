@@ -40,3 +40,19 @@ class MACrossStrategy(Strategy):
             return Signal(type=SignalType.SELL, symbol=context.symbol)
 
         return None
+
+    def score(self, context: Context) -> float:
+        """MA 偏离度: (fast - slow) / close, 标准化到 [-1, 1]"""
+        fast_col = f'ma_{self.fast_period}'
+        slow_col = f'ma_{self.slow_period}'
+
+        fast = context.bar.get(fast_col)
+        slow = context.bar.get(slow_col)
+        close = context.bar.get('close')
+
+        if any(v is None or pd.isna(v) for v in [fast, slow, close]) or close < 1e-8:
+            return 0.0
+
+        gap = (fast - slow) / close
+        # 典型偏离在 ±0.05 以内，映射到 [-1, 1]
+        return max(-1.0, min(1.0, gap / 0.03))

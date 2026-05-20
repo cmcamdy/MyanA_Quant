@@ -33,7 +33,7 @@ class FeatureBuilder:
         return 31
 
     def _load_parquet(self, symbol: str) -> Optional[pd.DataFrame]:
-        """加载单只股票日线 parquet"""
+        """加载单只股票日线 parquet，按配置的日期范围过滤"""
         if '.SH' in symbol.upper():
             market, code = 'sh', symbol.split('.')[0]
         elif '.SZ' in symbol.upper():
@@ -45,7 +45,19 @@ class FeatureBuilder:
         path = self.storage_root / market / code / '1d.parquet'
         if not path.exists():
             return None
-        return pd.read_parquet(path)
+        df = pd.read_parquet(path)
+
+        # 日期过滤
+        if self.config.start_date is not None or self.config.end_date is not None:
+            if isinstance(df.index, pd.DatetimeIndex):
+                if self.config.start_date:
+                    df = df[df.index >= pd.Timestamp(self.config.start_date)]
+                if self.config.end_date:
+                    df = df[df.index <= pd.Timestamp(self.config.end_date)]
+            else:
+                logger.warning(f"{symbol}: index 非 DatetimeIndex, 无法按日期过滤")
+
+        return df
 
     def _compute_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
         """对原始 OHLCV DataFrame 计算技术指标"""

@@ -65,6 +65,7 @@ class Strategy(ABC):
     """策略抽象基类
 
     子类实现 on_init 注册指标依赖，on_bar 产生交易信号。
+    可选实现 score 返回连续观点分数（-1 到 1），用于 Meta Strategy。
     """
 
     def __init__(self):
@@ -80,6 +81,22 @@ class Strategy(ABC):
 
     def on_finish(self, context: Context) -> None:
         pass
+
+    def score(self, context: Context) -> float:
+        """返回当前 bar 的连续观点分数
+
+        -1.0 = 强烈看空, 0.0 = 中性, 1.0 = 强烈看多
+        默认实现根据 on_bar 信号映射，子类可覆盖以提供更精细的分数。
+        """
+        sig = self.on_bar(context)
+        if sig is None or sig.type == SignalType.HOLD:
+            return 0.0
+        s = sig.strength if sig.strength else 1.0
+        if sig.type == SignalType.BUY:
+            return min(s, 1.0)
+        elif sig.type == SignalType.SELL:
+            return -min(s, 1.0)
+        return 0.0
 
     def register_indicator(self, name: str, **params) -> None:
         self._indicator_specs.append({'name': name, **params})

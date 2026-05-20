@@ -42,6 +42,8 @@ def run_predict(args):
     config = DLConfig(
         data_dir=str(PROJECT_ROOT / "data"),
         checkpoint_dir=str(PROJECT_ROOT / "checkpoints" / "demo"),
+        start_date=args.start_date,
+        end_date=args.end_date,
         window=args.window,
         horizon=args.horizon,
         hidden_dim=128,
@@ -57,6 +59,7 @@ def run_predict(args):
     logger.info("深度学习收益率预测 Demo (回归模式)")
     logger.info(f"行业: {args.industry}")
     logger.info(f"股票数: {len(symbols)}")
+    logger.info(f"数据范围: {config.start_date or '最早'} ~ {config.end_date or '最新'}")
     logger.info(f"配置: window={config.window}, horizon={config.horizon}, epochs={config.epochs}, loss={config.loss_type}")
     logger.info(f"信号阈值: buy>{config.buy_threshold:.4f}, sell<{config.sell_threshold:.4f}")
     logger.info("=" * 60)
@@ -112,6 +115,8 @@ def run_backtest(args):
     config = DLConfig(
         data_dir=str(PROJECT_ROOT / "data"),
         checkpoint_dir=str(PROJECT_ROOT / "checkpoints" / "demo"),
+        start_date=args.start_date,
+        end_date=args.end_date,
         window=args.window,
         horizon=args.horizon,
         hidden_dim=128,
@@ -177,6 +182,10 @@ def main():
                         help='买入阈值 (预测收益率超过此值则买入)')
     parser.add_argument('--sell-threshold', type=float, default=-0.005,
                         help='卖出阈值 (预测收益率低于此值则卖出)')
+    parser.add_argument('--start-date', type=str, default=None,
+                        help='数据起始日期 (如 2013-01-01)')
+    parser.add_argument('--end-date', type=str, default=None,
+                        help='数据截止日期 (如 2026-01-01)')
     parser.add_argument('--backtest', action='store_true',
                         help='训练后运行回测')
     args = parser.parse_args()

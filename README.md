@@ -23,22 +23,31 @@ MyanAQuant/
 │   │       ├── volatility.py     # 布林带, ATR, Keltner, Chaikin Vol
 │   │       └── volume.py         # VWAP, OBV, MFI
 │   ├── strategies/               # 策略回测模块
-│   │   ├── base.py               # Strategy ABC, Signal, Position, Portfolio
+│   │   ├── base.py               # Strategy ABC (含 score 方法), Signal, Position, Portfolio
 │   │   ├── engine.py             # BacktestEngine 向量化回测引擎
 │   │   ├── portfolio_engine.py   # PortfolioEngine 多标的组合回测
 │   │   ├── risk.py               # RiskManager 风控（止损/止盈/仓位限制）
-│   │   ├── optimizer.py          # Optimizer 参数优化（网格搜索）
+│   │   ├── optimizer.py          # Optimizer 参数优化（网格搜索/遗传/贝叶斯）
 │   │   ├── result.py             # BacktestResult, TradeRecord, 绩效指标
 │   │   ├── sizers.py             # PositionSizer, FixedSizer, AllInSizer
 │   │   ├── composite.py          # CompositeStrategy 组合策略
 │   │   └── examples/             # 策略示例
-│   │       └── ma_cross.py       # 双均线交叉策略
-│   ├── dl/                        # 深度学习预测模块
-│   │   ├── config.py              # DLConfig 配置
+│   │       ├── ma_cross.py       # 双均线交叉策略
+│   │       ├── sar.py            # SAR 抛物线策略
+│   │       ├── rsi.py            # RSI 超买超卖策略
+│   │       └── bollinger.py      # 布林带策略
+│   ├── dl/                        # 深度学习模块
+│   │   ├── config.py              # DLConfig 配置（回归模式）
 │   │   ├── feature_builder.py     # FeatureBuilder 特征工程
 │   │   ├── dataset.py             # StockDataset PyTorch数据集
-│   │   ├── model.py               # PricePredictor 网络
-│   │   └── trainer.py             # Trainer 训练/评估/预测
+│   │   ├── model.py               # PricePredictor Transformer 回归网络
+│   │   ├── trainer.py             # Trainer 训练/评估/预测
+│   │   ├── dl_strategy.py         # DLStrategy 桥接回测引擎
+│   │   ├── meta_config.py         # MetaConfig 学习型组合策略配置
+│   │   ├── meta_model.py          # MetaModel 策略注意力加权网络
+│   │   ├── meta_signal_collector.py # MetaSignalCollector 策略信号采集
+│   │   ├── meta_trainer.py        # MetaTrainer 训练/评估
+│   │   └── meta_strategy.py       # MetaStrategy 桥接回测引擎
 │   └── visualization/            # 可视化模块
 │       ├── candlestick.py        # K线图 + 指标叠加 + 买卖点标注
 │       ├── equity.py             # 权益曲线 + 回撤图
@@ -46,9 +55,10 @@ MyanAQuant/
 ├── scripts/                      # 脚本
 │   ├── download_daily.py         # A股日线批量下载脚本
 │   ├── download_industry_stock.py # 行业-股票映射下载脚本
-│   ├── demo_dl_predict.py         # 深度学习涨跌预测 Demo
+│   ├── demo_dl_predict.py         # 深度学习收益率预测 Demo
+│   ├── demo_meta_strategy.py      # Meta Strategy 学习型组合策略 Demo
 │   └── watchdog_download.py      # 下载守护脚本（卡住自动重启）
-├── tests/                        # 测试 (276 用例)
+├── tests/                        # 测试 (566 用例)
 │   └── unit/                     # 单元测试
 │       ├── data/                 # 数据模块测试
 │       ├── analysis/             # 指标模块测试
@@ -192,35 +202,108 @@ fig.savefig('trades.png')
 
 支持 `engine='matplotlib'`（静态图，适合保存）和 `engine='plotly'`（交互图，适合研究）。
 
-### 深度学习涨跌预测
+### 深度学习收益率预测
+
+```bash
+# 训练 + 预测
+python3 scripts/demo_dl_predict.py --start-date 2013-01-01
+
+# 训练 + 回测
+python3 scripts/demo_dl_predict.py --backtest --start-date 2013-01-01
+```
 
 ```python
-from dl import DLConfig, Trainer
+from dl import DLConfig, Trainer, DLStrategy
+from strategies.engine import BacktestEngine
 
-# 配置
+# 配置（回归模式：预测未来收益率）
 config = DLConfig(
     data_dir="./data",
-    window=120,          # 回看120天
-    horizon=1,           # 预测次日涨跌
-    hidden_dim=256,
-    epochs=50,
+    start_date="2013-01-01",    # 只用2013年以后的数据
+    window=60,
+    horizon=1,
+    epochs=300,
+    loss_type="huber",
+    buy_threshold=0.005,        # 预测收益率 > 0.5% 买入
+    sell_threshold=-0.005,      # 预测收益率 < -0.5% 卖出
 )
 
 # 训练
 trainer = Trainer(config)
 trainer.train(symbols=["600036.SH", "600519.SH", ...])
 
-# 回归测试
+# 评估
 result = trainer.evaluate()
-print(f"准确率: {result['accuracy']:.4f}")
-print(result['classification_report'])
+print(f"MSE: {result['mse']:.6f}")
+print(f"方向准确率: {result['direction_accuracy']:.4f}")
 
 # 预测
 pred = trainer.predict("600036.SH")
-print(pred['label'])  # 如 "小涨 (0%~2%)"
+print(f"预测收益率: {pred['predicted_return']:+.2%}")
+print(f"方向: {pred['direction']}")
+
+# 接入回测
+strategy = DLStrategy(config)
+result = BacktestEngine().run(strategy, df, symbol="600036.SH")
 ```
 
-6 分类输出: 大跌(<-5%) / 中跌(-5%~-2%) / 小跌(-2%~0%) / 小涨(0%~2%) / 中涨(2%~5%) / 大涨(>5%)
+### Meta Strategy: 学习型组合策略
+
+用注意力机制学习多个子策略的权重，动态决定看多/看空倾向。
+
+```bash
+# 训练 + 查看策略权重
+python3 scripts/demo_meta_strategy.py --start-date 2013-01-01
+
+# 训练 + 回测
+python3 scripts/demo_meta_strategy.py --backtest --start-date 2013-01-01
+```
+
+```python
+from dl import MetaConfig, MetaTrainer, MetaStrategy
+from strategies.examples.ma_cross import MACrossStrategy
+from strategies.examples.sar import SARStrategy
+from strategies.examples.rsi import RSIStrategy
+from strategies.examples.bollinger import BollingerStrategy
+
+# 配置
+config = MetaConfig(
+    strategies=[
+        MACrossStrategy(fast_period=5, slow_period=20),
+        SARStrategy(),
+        RSIStrategy(period=14),
+        BollingerStrategy(period=20),
+    ],
+    start_date="2013-01-01",
+    window=20,
+    epochs=100,
+)
+
+# 训练
+trainer = MetaTrainer(config)
+trainer.train(symbols)
+
+# 评估 — 查看各策略权重
+result = trainer.evaluate()
+for i, strat in enumerate(config.strategies):
+    w = result['avg_strategy_weights'][i]
+    print(f"{type(strat).__name__}: {w:.4f}")
+
+# 接入回测
+meta = MetaStrategy(config)
+result = BacktestEngine().run(meta, df, symbol="000807.SZ")
+```
+
+**工作原理**:
+
+每个子策略输出连续观点分数 `score()` (范围 -1 到 +1)，MetaModel 通过注意力机制学习各策略权重，输出预测收益率。
+
+| 策略 | score() 含义 |
+|------|-------------|
+| MACross | `(fast_ma - slow_ma) / close` 偏离度 |
+| SAR | 趋势方向 × 距离权重 |
+| RSI | `(50 - RSI) / 50` |
+| Bollinger | `1 - 2×%B` (下轨=+1, 上轨=-1) |
 
 ## 模块说明
 
@@ -236,15 +319,53 @@ print(pred['label'])  # 如 "小涨 (0%~2%)"
 | `IndustryLookup` | 行业分类查询，基于证监会行业分类，支持行业→股票、股票→行业双向查询 |
 | `DataManager` | 统一入口，cache-aside 模式，按频率自动选择数据源，支持增量更新 |
 
-### 深度学习预测模块 (`src/dl/`)
+### 深度学习模块 (`src/dl/`)
 
 | 类 | 说明 |
 |---|---|
-| `DLConfig` | 配置数据类，含窗口/预测周期/模型参数/训练参数 |
-| `FeatureBuilder` | 特征工程，从 parquet 构建 OHLCV+指标特征和涨跌标签，z-score 标准化 |
-| `StockDataset` | PyTorch Dataset 包装 |
-| `PricePredictor` | 全连接分类网络 (Linear+LayerNorm+ReLU+Dropout+Linear)，6 分类涨跌预测 |
-| `Trainer` | 训练器，支持训练/断点续训/增量训练/评估/单只预测 |
+| `DLConfig` | DL 配置，含 start_date/end_date 日期范围、window/horizon、损失函数、信号阈值 |
+| `FeatureBuilder` | 特征工程，从 parquet 构建 OHLCV+指标特征，z-score 标准化，支持日期过滤 |
+| `StockDataset` | PyTorch Dataset 包装 (float32 回归标签) |
+| `PricePredictor` | Transformer Decoder 回归网络，输出预测收益率 |
+| `Trainer` | 训练器，支持训练/断点续训/增量训练/评估(MSE/方向准确率)/单只预测 |
+| `DLStrategy` | DL→回测桥接，按 buy/sell 阈值生成 Signal |
+| `MetaConfig` | Meta 配置，含子策略列表、日期范围、信号阈值 |
+| `MetaModel` | 策略注意力加权网络，Conv1D 时序编码 + Multi-Head Attention，权重可解读 |
+| `MetaSignalCollector` | 策略信号采集器，运行子策略 score() 构建连续特征序列 |
+| `MetaTrainer` | Meta 训练器，训练后打印策略权重分布 |
+| `MetaStrategy` | Meta→回测桥接，滚动窗口维护 score 历史，推理输出 Signal |
+
+### 策略模块 (`src/strategies/`)
+
+| 类 | 说明 |
+|---|---|
+| `Strategy` | 策略抽象基类，子类实现 `on_init` + `on_bar`，可选覆盖 `score` 返回连续观点分数 |
+| `Signal` / `SignalType` | 交易信号，含 type/symbol/price/quantity/strength/reason |
+| `Position` / `Portfolio` | 持仓和组合状态跟踪 |
+| `Context` | 逐 bar 上下文，含当前 bar、历史 bars、组合状态 |
+| `BacktestEngine` | 向量化回测引擎：指标预计算 + 逐 bar 信号 + 组合跟踪 |
+| `BacktestConfig` | 回测配置（初始资金/手续费/滑点/基准），支持从 YAML 加载 |
+| `BacktestResult` | 回测结果，含绩效指标/权益曲线/交易记录/分标的明细，提供 `summary()` |
+| `PositionSizer` | 仓位管理协议，内置 `FixedSizer`/`AllInSizer` |
+| `CompositeStrategy` | 组合策略，支持 unanimous/any/majority 三种信号合并模式 |
+| `RiskManager` | 风控管理器：固定/ATR止损、追踪止损、固定/ATR止盈、仓位限制、回撤限制、日亏损限制 |
+| `PortfolioEngine` | 多标的组合回测引擎，支持普通 Strategy 和 MultiStrategy |
+| `Optimizer` | 参数优化器：网格搜索/遗传/贝叶斯，自定义目标函数 |
+
+**内置策略示例** (`src/strategies/examples/`):
+
+| 策略 | on_bar 触发条件 | score() 含义 |
+|------|----------------|-------------|
+| `MACrossStrategy` | 金叉/死叉 | MA 偏离度 |
+| `SARStrategy` | SAR 趋势翻转 | 趋势方向 × 距离 |
+| `RSIStrategy` | RSI 超买/超卖 | (50-RSI)/50 |
+| `BollingerStrategy` | 触及上下轨 | 1-2×%B |
+
+**回测流程：**
+1. `strategy.on_init(ctx)` — 注册指标依赖
+2. `IndicatorSet.compute(df)` — 向量化预计算所有指标
+3. 逐 bar 循环：风控检查 → 更新持仓市值 → 构建上下文 → 生成信号 → 风控过滤 → 执行交易
+4. 计算绩效指标：总收益率/年化/夏普/最大回撤/胜率/盈亏比
 
 ### 技术指标模块 (`src/analysis/`)
 
@@ -273,29 +394,6 @@ iset = IndicatorSet()
 iset.add('ma', period=5).add('ma', period=20).add('rsi', period=14)
 df_result = iset.compute(df)
 ```
-
-### 策略回测模块 (`src/strategies/`)
-
-| 类 | 说明 |
-|---|---|
-| `Strategy` | 策略抽象基类，子类实现 `on_init`（注册指标）和 `on_bar`（生成信号） |
-| `Signal` / `SignalType` | 交易信号，含 type/symbol/price/quantity/strength/reason |
-| `Position` / `Portfolio` | 持仓和组合状态跟踪 |
-| `Context` | 逐 bar 上下文，含当前 bar、历史 bars、组合状态 |
-| `BacktestEngine` | 向量化回测引擎：指标预计算 + 逐 bar 信号 + 组合跟踪 |
-| `BacktestConfig` | 回测配置（初始资金/手续费/滑点/基准），支持从 YAML 加载 |
-| `BacktestResult` | 回测结果，含绩效指标/权益曲线/交易记录/分标的明细，提供 `summary()` |
-| `PositionSizer` | 仓位管理协议，内置 `FixedSizer`/`AllInSizer` |
-| `CompositeStrategy` | 组合策略，支持 unanimous/any/majority 三种信号合并模式 |
-| `RiskManager` | 风控管理器：固定/ATR止损、追踪止损、固定/ATR止盈、仓位限制、回撤限制、日亏损限制 |
-| `PortfolioEngine` | 多标的组合回测引擎，支持普通 Strategy 和 MultiStrategy |
-| `Optimizer` | 参数优化器：网格搜索、自定义目标函数、结果排名 |
-
-**回测流程：**
-1. `strategy.on_init(ctx)` — 注册指标依赖
-2. `IndicatorSet.compute(df)` — 向量化预计算所有指标
-3. 逐 bar 循环：风控检查 → 更新持仓市值 → 构建上下文 → 生成信号 → 风控过滤 → 执行交易
-4. 计算绩效指标：总收益率/年化/夏普/最大回撤/胜率/盈亏比
 
 ### 风控模块 (`src/strategies/risk.py`)
 
@@ -388,6 +486,7 @@ logging:
 - **语言**: Python 3.9+
 - **数据源**: Baostock（主力）, AkShare（日线备用）
 - **数据分析**: Pandas, NumPy
+- **深度学习**: PyTorch (Transformer Decoder, Conv1D + Attention)
 - **可视化**: Matplotlib, Plotly
 - **存储**: Parquet
 - **回测**: 自研回测引擎（向量化指标 + 逐 bar 信号）
@@ -400,6 +499,7 @@ pytest tests/ -v
 
 # 运行单个模块测试
 pytest tests/unit/strategies/ -v
+pytest tests/unit/dl/ -v
 
 # 跳过需要 plotly 的测试
 pytest tests/ -v -k "not plotly"

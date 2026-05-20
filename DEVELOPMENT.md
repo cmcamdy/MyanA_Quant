@@ -10,9 +10,10 @@
 |------|------|------|------|
 | `src/data/` | 已完成 | 138 用例 | 数据获取与存储 |
 | `src/analysis/` | 已完成 | 55 用例 | 技术指标计算 |
-| `src/strategies/` | 已完成 | 110 用例 | 策略回测引擎 + 风控 + 组合回测 + 参数优化 |
+| `src/strategies/` | 已完成 | 115 用例 | 策略回测引擎 + 风控 + 组合回测 + 参数优化 + 4个内置策略 |
 | `src/visualization/` | 已完成 | 13+5 用例 | 图表可视化 |
 | `src/factors/` | 已完成 | 31 用例 | 因子分析 |
+| `src/dl/` | 已完成 | 54 用例 | 深度学习收益率预测 (Transformer 回归) + Meta Strategy (注意力加权组合策略) |
 | `src/data/cleaner.py` | 已完成 | 45 用例 | 数据清洗 |
 | `src/reports/` | 已完成 | 18 用例 | HTML报告生成 |
 | `src/monitor/` | 已完成 | 27 用例 | 实时策略监控 |
@@ -77,25 +78,42 @@ data/
 - 懒加载: 首次调用时读取 CSV，后续复用内存缓存
 - 支持行业→股票（`get_stocks`）、股票→行业（`get_industry`）双向查询
 
-### 深度学习预测模块 (`src/dl/`)
+### 深度学习模块 (`src/dl/`)
 
-**模型结构**: Linear → LayerNorm → ReLU → Dropout → Linear，6 分类涨跌预测。输入展平后维度 = num_features × window（默认 31×120=3720）。
+**模型结构** (`PricePredictor`): Transformer Decoder + 因果时序 Mask。输入 [B, num_features, window] → Linear 投影 → 位置编码 → TransformerDecoder → 最后时间步 → LayerNorm → Dropout → Linear → [B] 预测收益率（回归模式）。
 
 **特征工程** (`FeatureBuilder`):
 - 从本地 parquet 读取 OHLCV，通过 `IndicatorSet` 计算 18 种技术指标，共 31 个特征列
 - 滑动窗口构建样本：每个交易日取前 window 天的 [31, window] 特征矩阵
-- 标签生成：未来 horizon 天收益率按 6 个区间映射（<-5%, -5%~-2%, -2%~0%, 0%~2%, 2%~5%, >5%）
+- 标签生成：未来 horizon 天的连续收益率（回归标签，float32）
 - z-score 标准化：按训练集计算均值/标准差，保存为 scaler.npz 供推理时复用
+- 标签归一化：`normalize_labels()` / `denormalize_labels()` 用于训练稳定性和推理还原
+- 日期过滤：支持 `start_date` / `end_date` 配置，只使用指定时间范围内的数据
 - NaN/Inf 处理：指标初始几行用 0 填充
 
 **训练器** (`Trainer`):
 - 完整训练：FeatureBuilder 构建数据 → 按时间顺序划分 train/val/test → 训练 + 早停 → 保存最佳模型
+- 损失函数：支持 MSE / MAE / Huber（默认），Huber 的 delta 可配置
 - 断点续训：加载 checkpoint 中的模型权重和 optimizer 状态，从断点 epoch 继续
 - 增量训练：降低学习率（×0.1）fine-tune 已有模型
-- 回归测试：加载最佳模型在测试集上评估，输出 accuracy/classification_report/confusion_matrix
-- 单只预测：构建特征 → softmax → 6 分类概率
+- 评估指标：MSE / RMSE / MAE / 方向准确率 / 相关系数
+- 单只预测：构建特征 → 模型推理 → denormalize → 预测收益率
 
-**Checkpoint 内容**: 模型权重、optimizer 状态、epoch、best_val_loss、scaler 参数、训练元信息（特征维度、股票列表）
+**DLStrategy 桥接**: 将 DL 预测接入回测引擎。on_bar 中从 ctx.bars 构建特征 → 模型推理 → 按 buy_threshold/sell_threshold 阈值生成 BUY/SELL/HOLD 信号。
+
+**Meta Strategy** (`MetaConfig` + `MetaModel` + `MetaSignalCollector` + `MetaTrainer` + `MetaStrategy`):
+- 核心思想：多个子策略输出连续观点分数 score() ([-1, 1])，MetaModel 通过注意力机制学习各策略权重，输出预测收益率
+- `MetaModel`: Conv1D 时序编码 (每个策略的 score 序列) + Multi-Head Attention 学习策略权重 + MLP 输出头。注意力权重可直接解读为策略重要性
+- `MetaSignalCollector`: 在历史数据上运行所有子策略的 score()，采集连续特征序列 [K, window]，支持日期过滤
+- `MetaStrategy` 桥接: 滚动窗口维护 score 历史 → 标准化 → MetaModel 推理 → 阈值生成信号，每50个bar输出诊断日志
+
+**Strategy.score()**: 基类新增方法，返回当前 bar 的连续观点分数 (-1=看空, 0=中性, 1=看多)。默认根据 on_bar 信号映射，子类可覆盖：
+- MACrossStrategy: (fast_ma - slow_ma) / close 偏离度
+- SARStrategy: 趋势方向 × (0.5 + 距离权重)
+- RSIStrategy: (50 - RSI) / 50
+- BollingerStrategy: 1 - 2×%B (下轨=+1, 上轨=-1)
+
+**Checkpoint 内容**: 模型权重、optimizer 状态、epoch、best_val_loss、scaler 参数（含标签归一化参数）、训练元信息（特征维度、股票列表）
 
 ### 指标模块 (`src/analysis/`)
 
@@ -141,6 +159,14 @@ data/
    - 计算手续费（按名义金额）和滑点（价格偏移）
 5. `strategy.on_finish(ctx)`
 6. `calc_performance_metrics()` 计算绩效
+
+**Strategy.score()**: 基类新增方法，返回 [-1, 1] 连续观点分数，用于 Meta Strategy。默认实现根据 on_bar 信号映射（BUY→+strength, SELL→-strength, None/HOLD→0）。子类可覆盖以提供更精细的连续观点。
+
+**内置策略示例**:
+- `MACrossStrategy`: 金叉/死叉；score() = MA偏离度
+- `SARStrategy`: 趋势翻转；score() = 趋势方向×距离
+- `RSIStrategy`: 超买超卖；score() = (50-RSI)/50
+- `BollingerStrategy`: 触及上下轨；score() = 1-2×%B
 
 **滑点模型**: 买入价 = close * (1 + slippage)，卖出价 = close * (1 - slippage)
 
@@ -265,6 +291,7 @@ pytest tests/unit/monitor/ -v       # 实时监控
 ## 已知限制
 
 - 简单滑点模型：固定百分比偏移，非真实订单簿模拟
+- DL 预测精度受市场regime影响，建议用 `start_date` 限制训练数据到近期
 
 ## 后续规划
 

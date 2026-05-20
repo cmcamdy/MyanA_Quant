@@ -30,6 +30,8 @@ DEFAULT_INDICATORS = [
 class DLConfig:
     # 数据
     data_dir: str = "./data"
+    start_date: Optional[str] = None   # 数据起始日期, 如 "2013-01-01"
+    end_date: Optional[str] = None     # 数据截止日期, 如 "2026-01-01"
     window: int = 120
     horizon: int = 1
     train_ratio: float = 0.7

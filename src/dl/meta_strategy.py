@@ -1,0 +1,155 @@
+"""MetaStrategy: 学习型组合策略，桥接回测引擎
+
+在每个 on_bar 中:
+  1. 运行每个子策略的 score() 获取连续观点分数
+  2. 维护滚动窗口的分数历史
+  3. 喂入 MetaModel 推理 → 得到预测收益率 + 策略权重
+  4. 按阈值生成 BUY/SELL/HOLD 信号
+"""
+
+import logging
+from collections import deque
+from typing import List, Optional
+
+import numpy as np
+
+from strategies.base import Strategy, Context, Signal, SignalType
+from .meta_config import MetaConfig
+from .meta_model import MetaModel
+from .meta_signal_collector import MetaSignalCollector
+
+logger = logging.getLogger("dl.meta_strategy")
+
+
+class MetaStrategy(Strategy):
+    """学习型组合策略
+
+    用注意力机制学习子策略权重，动态决定看多/看空倾向。
+    """
+
+    def __init__(
+        self,
+        config: MetaConfig,
+        buy_threshold: Optional[float] = None,
+        sell_threshold: Optional[float] = None,
+    ):
+        super().__init__()
+        self.config = config
+        self.buy_threshold = buy_threshold or config.buy_threshold
+        self.sell_threshold = sell_threshold or config.sell_threshold
+        self.strategies = config.strategies
+        self._model: Optional[MetaModel] = None
+        self._collector: Optional[MetaSignalCollector] = None
+        self._device = None
+        self._score_history: Optional[deque] = None
+        self._bar_count = 0
+        self._loaded = False
+
+    def _ensure_loaded(self):
+        if self._loaded:
+            return
+
+        import torch
+        from pathlib import Path
+
+        self._device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        checkpoint_dir = Path(self.config.checkpoint_dir)
+
+        # 加载 scaler
+        scaler_path = checkpoint_dir / "meta_scaler.npz"
+        if not scaler_path.exists():
+            raise FileNotFoundError(f"未找到 scaler: {scaler_path}，请先训练模型")
+        self._collector = MetaSignalCollector(self.config)
+        self._collector.load_scaler(str(scaler_path))
+
+        # 加载模型
+        self._model = MetaModel(
+            num_strategies=self.config.num_strategies,
+            window=self.config.window,
+            hidden_dim=self.config.hidden_dim,
+            dropout=self.config.dropout,
+        ).to(self._device)
+
+        best_path = checkpoint_dir / "best_model.pt"
+        if not best_path.exists():
+            raise FileNotFoundError(f"未找到模型: {best_path}，请先训练模型")
+        import torch as th
+        checkpoint = th.load(best_path, map_location=self._device, weights_only=False)
+        self._model.load_state_dict(checkpoint['model_state_dict'])
+        self._model.eval()
+
+        # 初始化分数历史
+        self._score_history = deque(maxlen=self.config.window)
+
+        self._loaded = True
+        logger.info(f"MetaStrategy 加载完成, {self.config.num_strategies} 个子策略")
+
+    def on_init(self, context: Context) -> None:
+        # 注册所有子策略的指标依赖
+        for strat in self.strategies:
+            strat.on_init(context)
+            for spec in strat.indicator_specs:
+                self.register_indicator(spec['name'], **{k: v for k, v in spec.items() if k != 'name'})
+
+    def on_bar(self, context: Context) -> Optional[Signal]:
+        self._ensure_loaded()
+
+        # 运行每个子策略的 score()
+        step_scores = [strat.score(context) for strat in self.strategies]
+
+        # 记录到历史
+        self._score_history.append(step_scores)
+
+        # 窗口不足则不产生信号
+        if len(self._score_history) < self.config.window:
+            return None
+
+        # 构建特征: [K, window]
+        K = len(self.strategies)
+        window = self.config.window
+        features = np.zeros((K, window), dtype=np.float32)
+
+        for t, scores in enumerate(self._score_history):
+            for j, score in enumerate(scores):
+                features[j, t] = score
+
+        # 标准化
+        features = self._collector.normalize_features(features[np.newaxis], fit=False)[0]
+
+        # 推理
+        import torch
+        with torch.no_grad():
+            sample = torch.from_numpy(features).unsqueeze(0).to(self._device)
+            pred, attn_weights = self._model(sample)
+            pred_return = self._collector.denormalize_labels(pred.cpu().numpy())[0]
+            weights = attn_weights.cpu().numpy()[0]
+
+        # 诊断日志: 前几次预测详细输出，之后每50个bar输出一次
+        self._bar_count += 1
+        if self._bar_count <= 5 or self._bar_count % 50 == 0:
+            logger.info(
+                f"Bar#{self._bar_count} Meta预测={pred_return:.6f}, "
+                f"阈值=[{self.sell_threshold:.4f}, {self.buy_threshold:.4f}], "
+                f"权重={np.round(weights, 3).tolist()}"
+            )
+
+        # 生成信号
+        if pred_return > self.buy_threshold:
+            strength = min(pred_return / 0.05, 1.0)
+            return Signal(
+                type=SignalType.BUY, symbol=context.symbol,
+                strength=max(strength, 0.2),
+                reason=f"Meta预测={pred_return:.4f}, 权重={np.round(weights, 3).tolist()}",
+            )
+        elif pred_return < self.sell_threshold:
+            strength = min(abs(pred_return) / 0.05, 1.0)
+            return Signal(
+                type=SignalType.SELL, symbol=context.symbol,
+                strength=max(strength, 0.2),
+                reason=f"Meta预测={pred_return:.4f}, 权重={np.round(weights, 3).tolist()}",
+            )
+
+        return Signal(
+            type=SignalType.HOLD, symbol=context.symbol,
+            reason=f"Meta预测={pred_return:.4f}",
+        )
