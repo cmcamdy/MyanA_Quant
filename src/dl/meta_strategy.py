@@ -191,20 +191,15 @@ class MetaStrategy(Strategy):
         sell_line = np.percentile(hist, self.config.sell_percentile * 100)
 
         if pred_return >= buy_line:
-            # 在历史中排名越高，信号越强
-            rank = np.searchsorted(np.sort(hist), pred_return) / len(hist)
-            strength = max(rank, 0.2)
             return Signal(
                 type=SignalType.BUY, symbol=context.symbol,
-                strength=strength,
+                strength=1.0,
                 reason=f"Meta预测={pred_return:.4f}, 高于{self.config.buy_percentile:.0%}分位({buy_line:.4f})",
             )
         elif pred_return <= sell_line:
-            rank = 1.0 - np.searchsorted(np.sort(hist), pred_return) / len(hist)
-            strength = max(rank, 0.2)
             return Signal(
                 type=SignalType.SELL, symbol=context.symbol,
-                strength=strength,
+                strength=1.0,
                 reason=f"Meta预测={pred_return:.4f}, 低于{self.config.sell_percentile:.0%}分位({sell_line:.4f})",
             )
 
@@ -216,17 +211,15 @@ class MetaStrategy(Strategy):
     def _fixed_signal(self, pred_return: float, weights: np.ndarray, context: Context) -> Signal:
         """固定阈值信号"""
         if pred_return > self.buy_threshold:
-            strength = min(pred_return / 0.05, 1.0)
             return Signal(
                 type=SignalType.BUY, symbol=context.symbol,
-                strength=max(strength, 0.2),
+                strength=1.0,
                 reason=f"Meta预测={pred_return:.4f}, 权重={np.round(weights, 3).tolist()}",
             )
         elif pred_return < self.sell_threshold:
-            strength = min(abs(pred_return) / 0.05, 1.0)
             return Signal(
                 type=SignalType.SELL, symbol=context.symbol,
-                strength=max(strength, 0.2),
+                strength=1.0,
                 reason=f"Meta预测={pred_return:.4f}, 权重={np.round(weights, 3).tolist()}",
             )
 

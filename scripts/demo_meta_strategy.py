@@ -208,7 +208,7 @@ def main():
                         help='行业名称 (与 --symbols 二选一)')
     parser.add_argument('--symbols', type=str, default=None,
                         help='直接指定股票列表, 逗号分隔 (如 601600.SH,000807.SZ)')
-    parser.add_argument('--epochs', type=int, default=100)
+    parser.add_argument('--epochs', type=int, default=10)
     parser.add_argument('--window', type=int, default=20)
     parser.add_argument('--horizon', type=int, default=1)
     parser.add_argument('--loss', type=str, default='huber', choices=['mse', 'mae', 'huber'])
