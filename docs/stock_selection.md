@@ -37,7 +37,7 @@ src/stock_selection/
 from stock_selection import create_screener, available_methods
 
 # 查看可用方法
-print(available_methods())  # ['factor', 'jys']
+print(available_methods())  # ['factor', 'jys', 'trend']
 
 # 创建筛选器
 screener = create_screener("jys", top_n=10, market="all")
@@ -369,6 +369,30 @@ screening:
     min_turnover: 0.3          # 最低换手率%
     market: all                # all(A股+港股通) / a / hk / csi300
 ```
+
+### 方式4: Streamlit 可视化系统
+
+```bash
+# 安装 Web 依赖
+pip install streamlit aiohttp
+
+# 启动
+streamlit run web/app.py
+```
+
+**功能**:
+
+| 功能 | 说明 |
+|------|------|
+| 选股方法切换 | 侧边栏选择 JYS/因子/趋势，预留扩展 |
+| JYS 参数调节 | 市场、Top N、最低分、PE/换手率/股价阈值 |
+| 单股评分 | 输入代码 → 五维雷达图 + 维度柱状图 + 评分明细 |
+| 批量筛选 | 筛选结果表 + CSV下载 |
+| 五维分析 | 雷达图(Scatterpolar) + 维度得分柱状图 + 子项明细 |
+| 分布统计 | 评级分布、市场饼图、得分直方图、PE-Score散点图 |
+| 数据缓存 | `@st.cache_data(ttl=3600)` + 手动清除 |
+
+**异步兼容**: Streamlit 运行在 Tornado 事件循环上，`TencentFetcher` 检测到后会降级为纯同步模式（20分钟+）。Web 应用通过 `ThreadPoolExecutor` 在独立线程中运行筛选，使 `asyncio.run()` 正常执行，保持异步模式速度（~15-20秒/5800只）。
 
 ## 与原有因子选股的对比
 
