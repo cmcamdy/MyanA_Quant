@@ -68,7 +68,7 @@ MyanAQuant/
 ├── scripts/                      # 脚本
 │   ├── download_daily.py         # A股日线批量下载脚本
 │   ├── download_industry_stock.py # 行业-股票映射下载脚本
-│   ├── demo_portfolio.py         # Portfolio组合回测 Demo（含选股/搜索）
+│   ├── demo_portfolio.py         # Portfolio组合回测 Demo（含因子选股/策略搜索）
 │   ├── demo_jys_screen.py        # JYS五维选股 Demo
 │   ├── demo_dl_predict.py         # 深度学习收益率预测 Demo
 │   ├── demo_meta_strategy.py      # Meta Strategy 学习型组合策略 Demo
