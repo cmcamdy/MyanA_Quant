@@ -1,11 +1,11 @@
-# 量化交易分析系统 (lianghua)
+# 量化交易分析系统 (MyanAQuant)
 
 用于策略研究、回测和分析的量化交易分析系统，不包含实盘交易功能。
 
 ## 项目结构
 
 ```
-lianghua/
+MyanAQuant/
 ├── src/                          # 源代码
 │   ├── data/                     # 数据获取模块
 │   │   ├── base.py               # KlineData, DataProvider 基类
@@ -97,7 +97,7 @@ python scripts/download_daily.py --incremental
 python scripts/download_daily.py --symbols 000807.SZ,600036.SH
 
 # 定时任务：每个交易日 18:00 增量更新
-# crontab: 0 18 * * 1-5 cd /path/to/lianghua && python scripts/download_daily.py --incremental
+# crontab: 0 18 * * 1-5 cd /path/to/MyanAQuant && python scripts/download_daily.py --incremental
 ```
 
 ### 下载行业分类数据
