@@ -318,6 +318,140 @@ all_data = all_overrides()  # Dict[str, Dict]
 
 **修正机制**: `JYSScorer.calculate_score()` 自动应用override，无需手动调用。对API数据中股息率异常的股票（如中国人寿API返回5.49%实际为1.48%），用修正值替换。**注意：override仅应用于A股**，港股API字段[47]返回的股息率可靠，直接使用。
 
+### TrendScreener — Minervini Stage 2 趋势选股
+
+基于 Mark Minervini 《Trade Like a Stock Market Wizard》的趋势跟踪选股方法，核心是识别处于 Stage 2 上升趋势的股票。组合 `TencentFetcher` + `TrendScorer` 的一站式趋势选股工具。
+
+```python
+from stock_selection import TrendScreener
+
+screener = TrendScreener(
+    top_n=10,               # 返回前10只
+    min_score=50,           # 最低综合分
+    market="csi300",        # "csi300"(默认) / "all" / "a" / "hk"
+    benchmark="sh000001",   # 基准指数 (sh000001=上证 / sz399001=深证 / sz399006=创业板)
+    max_concurrent=20,      # 异步并发数
+    sma_periods=[50, 150, 200],  # SMA 周期
+    min_criteria_pass=7,    # Minervini模板最少通过条件数
+)
+
+# 沪深300趋势选股
+top_df, all_df = screener.screen_all()
+
+# 指定股票池
+top_df, all_df = screener.screen_all(codes=["601318", "600519", "600036"])
+```
+
+**为什么默认 market="csi300"**: 趋势选股需要 230 天 K 线数据（SMA200 计算），全量 5800 只股票的 K 线获取耗时约 65 秒以上，CSI300 约 3-5 秒。
+
+#### 4阶段分类 (Phase Classification)
+
+| Phase | 含义 | 判定条件 |
+|-------|------|----------|
+| **Uptrend** (Stage 2) | 上升趋势 | price > SMA50 > SMA150 > SMA200，且 SMA50/SMA200 斜率向上 |
+| **Base** (Stage 1) | 底部整理 | 不满足其他阶段条件 |
+| **Distribution** (Stage 3) | 派发 | SMA50 > SMA200 且 price > SMA50 × 1.25（过度偏离） |
+| **Downtrend** (Stage 4) | 下降趋势 | price < SMA50 且 price < SMA200 且 SMA50 < SMA200 |
+
+优先级: Downtrend > Uptrend > Distribution > Base
+
+#### Minervini 8条件趋势模板
+
+| # | 条件 | 说明 |
+|---|------|------|
+| 1 | price > SMA150 且 > SMA200 | 价格在长期均线上方 |
+| 2 | SMA150 > SMA200 | 长期均线多头排列 |
+| 3 | SMA200 趋势向上 | 200日均线至少1个月上升 |
+| 4 | SMA50 > SMA150 | 短期均线在长期上方（级联排列） |
+| 5 | price > SMA50 | 价格在短期均线上方 |
+| 6 | price >= 52周最低 × 1.30 | 距年内低点至少涨30% |
+| 7 | price >= 52周最高 × 0.75 | 距年内高点不超过25% |
+| 8 | Phase = Uptrend | 当前处于 Stage 2 上升趋势 |
+
+**通过标准**: 7/8 条件通过即视为趋势确认。
+
+#### VCP 波动收缩形态
+
+VCP (Volatility Contraction Pattern) 是 Minervini 识别突破前整理形态的核心方法：
+
+```
+价格
+  │    /\      /\
+  │   /  \    /  \    ← 每次回撤幅度递减
+  │  /    \  /    \
+  │ /      \/      \___  ← 缩量横盘，蓄势突破
+  │/
+  └──────────────────── 时间
+    回撤1   回撤2   回撤3 (更小)
+```
+
+**检测条件**:
+- 至少 2 次回撤，每次幅度小于前一次（收缩）
+- 后半段成交量低于前半段（缩量确认）
+- 接近 52 周高点加分
+
+**输出**: `(detected, contraction_count, quality 0-100)`
+
+#### 相对强度 (Relative Strength)
+
+RS = (股价 / 基准指数) 的 63 日线性回归斜率，映射到 0-10 分：
+
+| RS 分数 | 含义 |
+|---------|------|
+| 8-10 | 强势跑赢大盘 |
+| 5-7 | 与大盘同步 |
+| 0-4 | 弱于大盘 |
+
+#### ATR 止损 + 仓位管理
+
+基于 ATR (Average True Range) 的动态止损和仓位计算：
+
+- **止损价** = 当前价 - 2 × ATR(14)
+- **仓位比例** = (单笔风险比例 × 股价) / (股价 - 止损价) × 100%
+- **单笔风险**: 默认 1% 总资金
+
+#### 综合评分 (0-100)
+
+| 维度 | 满分 | 计算方式 |
+|------|------|----------|
+| Phase | 25 | Uptrend=25, Base=10, Distribution=5, Downtrend=0 |
+| 趋势模板 | 25 | 通过条件数/8 × 25 |
+| 相对强度 | 15 | RS/10 × 15 |
+| VCP | 15 | 检测到: 10 + 收缩次数×2 (上限15); 未检测但≥2次收缩: 5 |
+| 成交量突破 | 10 | 放量突破(vol≥1.5倍均量): 10; 适度放量(1.2倍): 5 |
+| 52周位置 | 10 | 距高点<5%: 10, <10%: 7, <20%: 4 |
+
+#### 买卖信号
+
+**买入信号**: Phase=Uptrend AND 趋势模板通过≥7 AND 综合分≥50
+
+**卖出信号**: Phase=Downtrend OR (Phase=Distribution AND 趋势模板通过<4)
+
+#### 输出列说明
+
+| 列名 | 类型 | 说明 |
+|------|------|------|
+| `symbol` | str | 标准代码 (如 601318.SH) |
+| `name` | str | 股票名称 |
+| `market` | str | 市场: "A" / "HK" |
+| `composite_score` | int | 综合得分 (0-100) |
+| `phase` | str | 阶段: Uptrend/Base/Distribution/Downtrend |
+| `criteria_passed` | int | 趋势模板通过条件数 (0-8) |
+| `criteria_total` | int | 趋势模板总条件数 (固定8) |
+| `vcp_detected` | bool | 是否检测到 VCP 形态 |
+| `vcp_contractions` | int | VCP 收缩次数 |
+| `vcp_quality` | int | VCP 质量 (0-100) |
+| `relative_strength` | float | 相对强度 (0-10) |
+| `volume_breakout` | bool | 是否成交量突破 |
+| `volume_ratio` | float | 当前量/均量比 |
+| `sma_50` | float | 50日均线 |
+| `sma_150` | float | 150日均线 |
+| `sma_200` | float | 200日均线 |
+| `atr_stop_loss` | float | ATR止损价 |
+| `position_size_pct` | float | 建议仓位比例(%) |
+| `buy_signal` | bool | 买入信号 |
+| `sell_signal` | bool | 卖出信号 |
+
 ## 使用方式
 
 ### 方式1: 独立运行脚本（推荐）
@@ -361,13 +495,35 @@ symbols = top_df['symbol'].tolist()
 # config/portfolio.yaml
 screening:
   enabled: true
-  mode: jys                    # factor(因子筛选) 或 jys(五维评分)
+  method: jys                    # factor(因子筛选) / jys(五维评分) / trend(趋势选股)
+
   jys:
-    top_n: 10                  # 选前10只
-    min_score: 40              # 最低综合分
-    max_pe: 30                 # 最大PE
-    min_turnover: 0.3          # 最低换手率%
-    market: all                # all(A股+港股通) / a / hk / csi300
+    top_n: 10                    # 选前10只
+    min_score: 40                # 最低综合分
+    max_pe: 30                   # 最大PE
+    min_turnover: 0.3            # 最低换手率%
+    market: all                  # all(A股+港股通) / a / hk / csi300
+
+  factor:
+    top_n: 20
+    min_bars: 60
+    factors:
+      momentum: {period: 20}
+      volatility: {period: 20}
+    indicator_factors:
+      ma_alignment: true
+    weights:
+      momentum_20: 0.25
+    filters:
+      avg_volume: {min: 1000000}
+
+  trend:
+    top_n: 10                    # 选前10只
+    min_score: 50                # 最低综合分
+    market: csi300               # csi300(默认) / all / a / hk
+    benchmark: sh000001          # sh000001=上证 / sz399001=深证 / sz399006=创业板
+    sma_periods: [50, 150, 200]  # SMA 周期
+    min_criteria_pass: 7         # Minervini模板最少通过条件数
 ```
 
 ### 方式4: Streamlit 可视化系统
@@ -394,22 +550,25 @@ streamlit run web/app.py
 
 **异步兼容**: Streamlit 运行在 Tornado 事件循环上，`TencentFetcher` 检测到后会降级为纯同步模式（20分钟+）。Web 应用通过 `ThreadPoolExecutor` 在独立线程中运行筛选，使 `asyncio.run()` 正常执行，保持异步模式速度（~15-20秒/5800只）。
 
-## 与原有因子选股的对比
+## 三种选股方法对比
 
-| 特性 | 因子选股 (StockScreener) | 五维选股 (JYSScreener) |
-|------|--------------------------|------------------------|
-| 数据源 | 本地Parquet历史数据 | 腾讯财经API实时数据 |
-| 支持市场 | A股 | A股 + 港股通 |
-| 评分维度 | 技术因子（动量/波动率/均线等） | 基本面+技术面五维 |
-| PE/PB/ROE | 无 | 有（核心维度） |
-| 利润增长 | 无 | 港股有真实API数据 |
-| 分红 | 无 | 有 |
-| 数据时效 | 历史回测 | 实时盘后 |
-| 适用场景 | 回测中的标的筛选 | 盘后选股推荐 |
-| 评分方法 | z-score标准化+加权 | 阈值阶梯+加权 |
-| 全量耗时 | 依赖本地数据量 | ~3秒(CSI300) / ~15秒(全量5800只) |
+| 特性 | 因子选股 (FactorScreener) | 五维选股 (JYSScreener) | 趋势选股 (TrendScreener) |
+|------|--------------------------|------------------------|--------------------------|
+| 数据源 | 本地Parquet历史数据 | 腾讯财经API实时数据 | 腾讯财经API实时+230天K线 |
+| 支持市场 | A股 | A股 + 港股通 | A股 + 港股通 |
+| 评分维度 | 技术因子（动量/波动率/均线等） | 基本面+技术面五维 | 趋势形态+相对强度+量价 |
+| PE/PB/ROE | 无 | 有（核心维度） | 无 |
+| 利润增长 | 无 | 港股有真实API数据 | 无 |
+| 分红 | 无 | 有 | 无 |
+| Phase分类 | 无 | 无 | 4阶段（Base/Up/Dist/Down） |
+| 形态识别 | 无 | 无 | VCP波动收缩 |
+| 止损/仓位 | 无 | 无 | ATR止损+仓位计算 |
+| 数据时效 | 历史回测 | 实时盘后 | 实时盘后 |
+| 适用场景 | 回测中的标的筛选 | 价值投资选股 | 趋势跟踪，强势突破股 |
+| 评分方法 | z-score标准化+加权 | 阈值阶梯+加权 | 趋势模板+形态+RS |
+| 全量耗时 | 依赖本地数据量 | ~3秒(CSI300) / ~15秒(全量) | ~3-5秒(CSI300) / ~65秒+(全量) |
 
-**推荐组合**: 先用JYS五维选股筛选出基本面优秀的标的池，再用因子选股在历史数据上验证和排序，最后接入策略回测。
+**推荐组合**: 先用JYS五维选股筛选出基本面优秀的标的池，再用趋势选股识别其中处于上升趋势的标的，最后用因子选股在历史数据上验证和排序，接入策略回测。
 
 ## 已知局限
 
@@ -417,6 +576,9 @@ streamlit run web/app.py
 2. **A股利润增长推导**: A股无利润增长API字段，使用 ROE * (1 - 分红支付率) 推导，不是真实的财报利润增长率，仅作为近似。港股有API字段[51]的真实数据。
 3. **A股股息率近似**: A股API字段[64]为股息率近似值，约89%的股票有数据，但部分股票精度有限（偏差可达2-3个百分点）。约50只股票由override表手工修正。港股API字段[47]可靠，无需修正。
 4. **港股换手率**: 港股API不返回换手率，通过成交量/总股本近似计算，可能不够精确。
-5. **阶梯评分**: 所有因子使用离散阈值，在边界处存在阶跃效应（如PE从20.01降到19.99，PE得分从7跳到10）。
+5. **阶梯评分**: JYS所有因子使用离散阈值，在边界处存在阶跃效应（如PE从20.01降到19.99，PE得分从7跳到10）。
 6. **无行业分散**: 当前按综合得分排名，不限制行业集中度，可能出现同行业多只入选。
 7. **港股货币**: 港股价格和市值为港元，与A股混合排名时货币差异未做汇率转换。
+8. **趋势选股数据量大**: 趋势选股需要230天K线数据（SMA200），全量5800只股票的K线获取耗时约65秒以上，建议使用CSI300（3-5秒）。
+9. **趋势选股A股适应性**: Minervini模板源自美股，A股T+1和涨跌停制度可能导致部分条件需调整（如成交量突破阈值）。
+10. **VCP检测局限**: VCP检测基于峰谷识别，在横盘整理或缓慢上涨中可能漏检或误检。
