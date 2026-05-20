@@ -41,6 +41,13 @@ def __getattr__(name):
         'results_to_dataframe': '.optimizer',
         'GeneticOptimizer': '.optimizer',
         'BayesianOptimizer': '.optimizer',
+        'StockScreener': '.screener',
+        'ScreeningConfig': '.screener',
+        'StrategySearcher': '.strategy_search',
+        'StrategySpec': '.strategy_search',
+        'StrategySearchResult': '.strategy_search',
+        'default_strategy_specs': '.strategy_search',
+        'parse_search_config': '.strategy_search',
     }
     if name in _lazy_map:
         import importlib

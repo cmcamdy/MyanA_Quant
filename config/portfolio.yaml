@@ -1,0 +1,146 @@
+# Portfolio 回测配置
+# 用法: python3 scripts/demo_portfolio.py --config config/portfolio.yaml
+
+# 标的选择 (优先级: symbols > industry)
+# symbols: 直接指定股票列表
+# symbols: [ "600219.SH", "600036.SH", "002078.SZ", "600900.SH"]
+symbols: [ "600157.SH", "601398.SH", "000630.SZ"]
+# industry: 单行业或多行业选股
+# industry: ["C32有色金属冶炼和压延加工业", "C39计算机、通信和其他电子设备制造业", "D44电力、热力生产和供应业", "J66货币金融服务"]
+# industry: ["C32有色金属冶炼和压延加工业", "D44电力、热力生产和供应业", "J66货币金融服务"]
+# per_industry: 每个行业最多选多少只 (0=不限, 默认0)
+per_industry: 1
+
+# 资金分配: equal (等权) / custom (自定义) / industry (行业均衡) / auto (自动判断)
+allocation: custom
+# 自定义权重 (allocation: custom 时生效)
+weights:
+  600157.SH: 0.2
+  601398.SH: 0.2
+  000630.SZ: 0.6
+  # 600219.SH: 0.2 # 南山铝业
+  # 600036.SH: 0.1 # 招商银行
+  # 002078.SZ: 0.3 # 太阳纸业
+  # 600900.SH: 0.3 # 长江电力
+
+# 数据时间范围
+# start_date: "2025-11-01"
+start_date: "2020-04-01"
+# end_date: "2026-01-01"
+
+# 策略: ma / rsi / macd / bollinger / kdj / sar / wr / cci / keltner / obv / mfi / vwap
+# 单策略
+# strategy: rsi
+# 多策略 (信号投票合并)
+strategy: [ma, macd, rsi, kdj]
+# 多策略投票模式: unanimous (全票) / any (任一, 默认) / majority (多数)
+vote_mode: majority
+
+# 策略参数 (按策略类型选择对应的参数, 其他忽略)
+strategy_params:
+  # MA 双均线
+  fast_period: 5
+  slow_period: 20
+  # MACD
+  fast_period: 10
+  slow_period: 24
+  signal_period: 7
+  # RSI
+  period: 14
+  # Bollinger
+  period: 25
+  num_std: 1.5
+  # KDJ
+  n: 9
+  m1: 3
+  m2: 3
+  # WR
+  period: 14
+  # CCI
+  period: 14
+  oversold: -100
+  overbought: 100
+  # Keltner
+  ema_period: 20
+  atr_period: 10
+  num_atr: 1.5
+  # OBV
+  ma_period: 20
+  # MFI
+  period: 14
+  # SAR / VWAP 无额外参数
+
+# 超买超卖阈值 (RSI / KDJ / WR / MFI 共用)
+oversold: 20
+overbought: 80
+
+# 再平衡 (三选一, 不设则不调仓)
+# frequency: W (每周) / M (每月) / Q (每季)
+drift: 漂移阈值 (如 0.05 = 偏离5%即调仓)
+rebalance:
+  frequency: M
+  drift: 0.1
+
+# 可视化
+plot: false
+plot_engine: matplotlib  # matplotlib 或 plotly
+
+# 其他
+min_bars: 20
+
+# ============================================================
+# 选股筛选 (python3 scripts/demo_portfolio.py --screen)
+# ============================================================
+screening:
+  enabled: false
+  # Factor 类因子
+  factors:
+    momentum: {period: 20}
+    volatility: {period: 20}
+    bias: {period: 20}
+  # 指标因子 (通过 IndicatorSet 计算)
+  indicator_factors:
+    ma_alignment: true      # MA多头排列得分 (5>10>20>60)
+    atr_price_ratio: true   # ATR/close 归一化波动率
+    obv_direction: true     # OBV趋势方向
+    avg_volume: true        # 20日均量 (流动性)
+  # 复合评分权重 (负值=越低越好)
+  weights:
+    momentum_20: 0.25
+    volatility_20: -0.15
+    bias_20: 0.15
+    ma_alignment: 0.20
+    obv_direction: 0.10
+    atr_price_ratio: -0.15
+  # 规则过滤 (先过滤再打分)
+  filters:
+    avg_volume: {min: 1000000}     # 日均量 > 100万
+    momentum_20: {min: -0.2}       # 动量不要太差
+  # 筛选数量
+  top_n: 20
+
+# ============================================================
+# 策略搜索 (python3 scripts/demo_portfolio.py --search)
+# ============================================================
+strategy_search:
+  enabled: false
+  # 搜索哪些策略
+  strategies: [ma, rsi, macd, bollinger, kdj, sar, wr, cci, keltner, obv, mfi, vwap]
+  # 自定义参数范围 (未列出的策略用默认范围)
+  param_ranges:
+    ma:
+      fast_period: {start: 3, stop: 10, step: 1}
+      slow_period: {start: 15, stop: 40, step: 5}
+    rsi:
+      period: {start: 7, stop: 21, step: 7}
+      oversold: [20.0, 25.0, 30.0]
+      overbought: [70.0, 75.0, 80.0]
+    macd:
+      fast_period: {start: 10, stop: 14, step: 2}
+      slow_period: {start: 24, stop: 28, step: 2}
+      signal_period: {start: 7, stop: 11, step: 2}
+  # 优化器: grid / genetic / bayesian
+  optimizer: grid
+  # 目标: sharpe / return
+  objective: sharpe
+  top_n: 3

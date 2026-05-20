@@ -89,6 +89,30 @@ class EqualWeightAllocation:
         return 1.0 / len(target_symbols) if target_symbols else 0.0
 
 
+class IndustryBalancedAllocation:
+    """行业均衡分配：先按行业等分资金，再行业内部等分"""
+
+    def __init__(self, industry_map: Dict[str, str]):
+        self._industry_map = industry_map
+
+    def allocate(self, symbol: str, signal: Signal, portfolio: Portfolio,
+                 current_price: float, target_symbols: List[str]) -> float:
+        if not target_symbols:
+            return 0.0
+        industry_symbols: Dict[str, List[str]] = {}
+        for sym in target_symbols:
+            ind = self._industry_map.get(sym, 'unknown')
+            industry_symbols.setdefault(ind, []).append(sym)
+        n_industries = len(industry_symbols)
+        if n_industries == 0:
+            return 0.0
+        ind = self._industry_map.get(symbol, 'unknown')
+        n_in_industry = len(industry_symbols.get(ind, []))
+        if n_in_industry == 0:
+            return 0.0
+        return (1.0 / n_industries) / n_in_industry
+
+
 class CustomAllocation:
     """自定义权重分配"""
 
@@ -118,7 +142,7 @@ class PortfolioEngine:
         self,
         config: Optional['BacktestConfig'] = None,
         position_sizer: Optional[PositionSizer] = None,
-        allocation: Optional[Union[EqualWeightAllocation, CustomAllocation]] = None,
+        allocation: Optional[Union[EqualWeightAllocation, IndustryBalancedAllocation, CustomAllocation]] = None,
         risk_manager: Optional[RiskManager] = None,
         rebalance: Optional[RebalanceConfig] = None,
     ):
