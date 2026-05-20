@@ -319,14 +319,18 @@ class MetaTrainer:
         if self.model is None:
             return
         self.model.eval()
-        # 用一个全零输入触发 (shape: [1, num_strategies, window])
-        dummy = torch.zeros(1, self.config.num_strategies, self.config.window).to(self.device)
+        # 通道数 = 策略数 + 市场特征数
+        num_channels = self.config.num_strategies + self.NUM_MKT_FEATURES
+        dummy = torch.zeros(1, num_channels, self.config.window).to(self.device)
         with torch.no_grad():
             _, weights = self.model(dummy)
         w = weights.cpu().numpy()[0]
         logger.info("策略注意力权重 (全零输入):")
         for i, strat in enumerate(self.config.strategies):
             logger.info(f"  {type(strat).__name__}: {w[i]:.4f}")
+        mkt_names = ['mkt_ret1d', 'mkt_ret5d', 'mkt_volchg']
+        for j, name in enumerate(mkt_names):
+            logger.info(f"  {name}: {w[self.config.num_strategies + j]:.4f}")
 
     def _save_checkpoint(self, epoch: int, is_best: bool):
         checkpoint = {
