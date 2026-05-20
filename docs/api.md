@@ -116,6 +116,33 @@ industries = lk.list_industries()
 
 数据源: Baostock 证监会行业分类，通过 `scripts/download_industry_stock.py` 下载，存储于 `data/industry-stock/industry_stock.csv`。
 
+### DataCleaner — 数据清洗与质量检测
+
+```python
+from data.cleaner import DataCleaner, DataQualityReport
+
+cleaner = DataCleaner()
+
+# 完整清洗流程 (异常值→NaN → 填充缺失值)
+df_clean = cleaner.clean(df, outlier_method='mad', outlier_threshold=3.0,
+                          fill_method='ffill', fill_limit=5)
+
+# 生成数据质量报告
+report = cleaner.quality_report(df)
+print(report.summary())
+
+# 单独使用各功能
+missing_mask = cleaner.detect_missing(df)             # 布尔矩阵
+outlier_mask = cleaner.detect_outliers(df, method='mad', threshold=3.0)  # 异常值检测
+df_filled = cleaner.fill_missing(df, method='ffill')  # 填充缺失值
+df_replaced = cleaner.replace_outliers(df, replacement='clip')  # 替换异常值
+errors = cleaner.validate_ohlcv(df)                   # OHLCV 约束校验
+```
+
+异常值检测方法: `mad`(中位数绝对偏差), `zscore`(Z 分数), `iqr`(四分位距)
+异常值替换策略: `clip`(截断), `nan`(替换为NaN), `median`(替换为中位数)
+OHLCV 约束校验: high>=low, high>=open/close, low<=open/close, volume>=0, DatetimeIndex 单调递增且无重复
+
 ---
 
 ## 深度学习预测模块 (`src/dl/`)
@@ -892,3 +919,138 @@ python scripts/monitor_strategy.py \
 | `--max-positions` | 0 | 最大持仓数(0=不限) |
 | `--source` | auto | 数据源 |
 | `--no-resume` | False | 不恢复上次状态 |
+
+---
+
+## DataPoller — 数据轮询器
+
+```python
+from monitor.poller import DataPoller
+
+poller = DataPoller(
+    data_manager=mgr,
+    symbols=["600036.SH", "000001.SZ"],
+    freq="1d",
+    poll_interval=60,
+)
+
+# 首次加载历史数据
+df = poller.warmup("600036.SH", start="2024-01-01", end="2024-12-31")
+
+# 拉取新增数据
+new_data = poller.poll()  # → Dict[str, pd.DataFrame]
+```
+
+---
+
+## 因子分析模块 (`src/factors/`)
+
+### Factor 基类
+
+```python
+from factors.base import Factor, FactorResult
+
+class MyFactor(Factor):
+    def compute(self, df: pd.DataFrame) -> pd.Series:
+        """计算因子值，返回与 df 索引一致的 Series"""
+        ...
+```
+
+### FactorResult
+
+```python
+@dataclass
+class FactorResult:
+    factor_name: str           # 因子名称
+    values: pd.Series          # 因子值序列
+    ic: float                  # 信息系数 (Spearman 秩相关)
+    ir: float                  # 信息比率 (IC均值/IC标准差)
+    quantile_returns: Dict[int, float]  # 各分位平均远期收益
+```
+
+### 内置因子
+
+```python
+from factors import MomentumFactor, VolatilityFactor, TurnoverFactor
+from factors import ReversalFactor, PriceVolumeFactor, BiasFactor
+
+MomentumFactor(period=20)      # 动量因子: (close - close.shift(p)) / close.shift(p)
+VolatilityFactor(period=20)    # 波动率因子: pct_change().rolling().std()
+TurnoverFactor(period=20)      # 换手率因子: vol_rolling / vol_rolling.shift(1)
+ReversalFactor(period=5)       # 反转因子: -pct_change(p)
+PriceVolumeFactor(period=10)   # 价量相关因子: price_pct.corr(volume_pct)
+BiasFactor(period=20)          # 乖离率因子: (close - MA) / MA
+```
+
+### FactorAnalyzer
+
+```python
+from factors import FactorAnalyzer
+
+analyzer = FactorAnalyzer(forward_period=1)
+
+# 完整分析单个因子
+result = analyzer.analyze(MomentumFactor(), df)
+
+# 批量分析
+summary_df = analyzer.analyze_batch([MomentumFactor(), VolatilityFactor()], df)
+# DataFrame 列: factor_name, ic, ir, q1_return, ..., q5_return
+
+# 截面 IC
+from factors.analyzer import cross_section_ic
+ic_series = cross_section_ic(factor_df, return_df)
+```
+
+### FactorScreener
+
+```python
+from factors import FactorScreener
+
+screener = FactorScreener(
+    factors=[MomentumFactor(), VolatilityFactor()],
+    weights={'momentum_20': 0.6, 'volatility_20': 0.4},  # 可选，默认等权
+)
+
+scores = screener.score(df)               # z-score 标准化后加权求和
+top_stocks = screener.rank(df, top_n=10)  # 排名选股
+filtered = screener.filter(df, condition=lambda d: d['momentum_20'] > 0)
+```
+
+---
+
+## 报告生成模块 (`src/reports/`)
+
+### ReportGenerator
+
+```python
+from reports import ReportGenerator
+
+generator = ReportGenerator(title="回测报告")
+
+# 生成并保存
+html = generator.generate(result, output_path="report.html")
+
+# 只返回 HTML 字符串
+html = generator.to_html(result)
+```
+
+报告包含: 绩效指标表格、权益曲线(SVG)、回撤曲线(SVG)、交易记录表格(最多100条)、盈亏分布柱状图(SVG)。
+
+---
+
+## 内置策略示例 (`src/strategies/examples/`)
+
+| 策略 | on_bar 触发条件 | score() 含义 |
+|------|----------------|-------------|
+| `MACrossStrategy(fast=5, slow=20)` | 金叉买入/死叉卖出 | MA 偏离度 |
+| `SARStrategy()` | SAR 趋势翻转 | 趋势方向 × 距离 |
+| `MACDStrategy(fast=12, slow=26, signal=9)` | DIF 上穿/下穿 DEA | (DIF-DEA)/close |
+| `RSIStrategy(period=14, oversold=30, overbought=70)` | RSI 超卖/超卖 | (50-RSI)/50 |
+| `KDJStrategy(n=9, m1=3, m2=3, oversold=20, overbought=80)` | K/D 交叉 + J 值极值 | (50-J)/50 |
+| `WRStrategy(period=14, oversold=-80, overbought=-20)` | WR 超卖/超卖 | (-50-WR)/50 |
+| `CCIStrategy(period=14, oversold=-100, overbought=100)` | CCI 通道外极值 | -CCI/100 |
+| `BollingerStrategy(period=20)` | 触及下轨买入/上轨卖出 | 1-2×%B |
+| `KeltnerStrategy(ema=20, atr=10, num_atr=1.5)` | 触及下轨买入/上轨卖出 | 1-2×%K |
+| `OBVStrategy(ma_period=20)` | OBV 穿越其均线 | OBV 偏离 MA |
+| `MFIStrategy(period=14, oversold=20, overbought=80)` | MFI 超卖/超卖 | (50-MFI)/50 |
+| `VWAPStrategy()` | 价格低于 VWAP 买入/高于卖出 | -gap/vwap |

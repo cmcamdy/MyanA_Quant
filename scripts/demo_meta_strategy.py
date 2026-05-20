@@ -72,21 +72,26 @@ def build_strategy_prior():
     ]
 
 
-def get_symbols_by_industry(industry_name: str) -> list:
+def get_symbols(args) -> list:
+    """根据参数获取股票列表"""
+    if args.symbols:
+        symbols = [s.strip() for s in args.symbols.split(',')]
+        logger.info(f"指定股票 {len(symbols)} 只: {symbols}")
+        return symbols
     from data.industry import IndustryLookup
     lk = IndustryLookup(str(PROJECT_ROOT / "data"))
-    symbols = lk.get_stocks(industry_name)
+    symbols = lk.get_stocks(args.industry)
     if not symbols:
-        logger.error(f"行业 '{industry_name}' 未找到或无股票")
+        logger.error(f"行业 '{args.industry}' 未找到或无股票")
         sys.exit(1)
+    logger.info(f"行业 '{args.industry}' 共 {len(symbols)} 只股票")
     return symbols
 
 
 def run_train(args):
     strategies = build_strategies()
     strategy_prior = build_strategy_prior()
-    symbols = get_symbols_by_industry(args.industry)
-    logger.info(f"行业 '{args.industry}' 共 {len(symbols)} 只股票")
+    symbols = get_symbols(args)
 
     config = MetaConfig(
         strategies=strategies,
@@ -138,7 +143,7 @@ def run_backtest(args):
 
     strategies = build_strategies()
     strategy_prior = build_strategy_prior()
-    symbols = get_symbols_by_industry(args.industry)
+    symbols = get_symbols(args)
 
     config = MetaConfig(
         strategies=strategies,
@@ -199,7 +204,10 @@ def run_backtest(args):
 
 def main():
     parser = argparse.ArgumentParser(description='Meta Strategy: 学习型组合策略')
-    parser.add_argument('--industry', type=str, default='C32有色金属冶炼和压延加工业')
+    parser.add_argument('--industry', type=str, default='C32有色金属冶炼和压延加工业',
+                        help='行业名称 (与 --symbols 二选一)')
+    parser.add_argument('--symbols', type=str, default=None,
+                        help='直接指定股票列表, 逗号分隔 (如 601600.SH,000807.SZ)')
     parser.add_argument('--epochs', type=int, default=100)
     parser.add_argument('--window', type=int, default=20)
     parser.add_argument('--horizon', type=int, default=1)
