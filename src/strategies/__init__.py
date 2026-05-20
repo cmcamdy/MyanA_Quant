@@ -48,6 +48,10 @@ def __getattr__(name):
         'StrategySearchResult': '.strategy_search',
         'default_strategy_specs': '.strategy_search',
         'parse_search_config': '.strategy_search',
+        'JYSScreener': '..stock_selection.jys_screener',
+        'JYSScorer': '..stock_selection.jys_scorer',
+        'JYSScoreResult': '..stock_selection.jys_scorer',
+        'TencentFetcher': '..stock_selection.tencent_fetcher',
     }
     if name in _lazy_map:
         import importlib

@@ -93,6 +93,15 @@ min_bars: 20
 # ============================================================
 screening:
   enabled: false
+  # 选股模式: factor (原有因子筛选) / jys (五维评分筛选)
+  mode: factor
+  # JYS五维评分配置 (mode: jys 时生效)
+  jys:
+    top_n: 10
+    min_score: 40
+    max_pe: 30
+    min_turnover: 0.3
+    market: all    # all(A股+港股通) / a(仅A股) / hk(仅港股通) / csi300(沪深300)
   # Factor 类因子
   factors:
     momentum: {period: 20}

@@ -464,6 +464,8 @@ def merge_config(yaml_cfg: dict, args) -> dict:
     # CLI --screen / --search
     if getattr(args, 'screen', None):
         cfg.setdefault('screening', {})['enabled'] = True
+    if getattr(args, 'screen_mode', None):
+        cfg.setdefault('screening', {})['mode'] = args.screen_mode
     if getattr(args, 'search', None):
         cfg.setdefault('strategy_search', {})['enabled'] = True
     return cfg
@@ -880,9 +882,14 @@ def run_backtest(cfg: dict):
 
 def run_screening(cfg: dict) -> list:
     """选股筛选, 返回 top_n 标的列表"""
+    screen_cfg = cfg.get('screening', {})
+    mode = screen_cfg.get('mode', 'factor')
+
+    if mode == 'jys':
+        return run_jys_screening(cfg)
+
     from strategies.screener import StockScreener, ScreeningConfig
 
-    screen_cfg = cfg.get('screening', {})
     storage = ParquetStorage(str(PROJECT_ROOT / "data"))
     screener = StockScreener(
         config=ScreeningConfig(
@@ -902,8 +909,35 @@ def run_screening(cfg: dict) -> list:
         start_date=cfg.get('start_date'),
         end_date=cfg.get('end_date'),
     )
-    print_screening_result(top, all_scored, len(symbols))
+    print_screening_result(top, all_scored, len(symbols), mode='factor')
     return top['symbol'].tolist() if not top.empty else symbols
+
+
+def run_jys_screening(cfg: dict) -> list:
+    """JYS五维评分选股"""
+    from stock_selection import JYSScreener
+    from stock_selection.tencent_fetcher import _symbol_to_code, load_codes_by_market
+
+    screen_cfg = cfg.get('screening', {})
+    jys_cfg = screen_cfg.get('jys', {})
+
+    # 如果用户指定了symbols，转为纯代码传入
+    codes = None
+    if cfg.get('symbols'):
+        codes = [_symbol_to_code(s) for s in cfg['symbols']]
+
+    screener = JYSScreener(
+        top_n=jys_cfg.get('top_n', 10),
+        min_score=jys_cfg.get('min_score', 40),
+        max_pe=jys_cfg.get('max_pe', 30),
+        min_turnover=jys_cfg.get('min_turnover', 0.3),
+        max_concurrent=jys_cfg.get('max_concurrent', 20),
+        market=jys_cfg.get('market', 'all'),
+    )
+    top, all_scored = screener.screen_all(codes=codes)
+    total = len(load_codes_by_market(jys_cfg.get('market', 'all'))) if codes is None else len(codes)
+    print_screening_result(top, all_scored, total, mode='jys')
+    return top['symbol'].tolist() if not top.empty else []
 
 
 def run_strategy_search(cfg: dict, data: dict) -> dict:
@@ -932,9 +966,10 @@ def run_strategy_search(cfg: dict, data: dict) -> dict:
     return cfg
 
 
-def print_screening_result(top, all_scored, total_symbols: int = 0):
+def print_screening_result(top, all_scored, total_symbols: int = 0, mode: str = 'factor'):
     print(f"\n{'='*60}")
-    print("选股筛选结果")
+    mode_label = 'JYS五维评分' if mode == 'jys' else '因子'
+    print(f"选股筛选结果 ({mode_label})")
     print(f"{'='*60}")
     no_data = total_symbols - len(all_scored) if total_symbols else 0
     top_n = len(top) if not top.empty else 0
@@ -957,11 +992,27 @@ def print_screening_result(top, all_scored, total_symbols: int = 0):
     all_sorted.index = all_sorted.index + 1
     all_sorted.index.name = 'rank'
 
-    print(f"\n--- 全部候选评分 (★=入选) ---")
-    for idx, row in all_sorted.iterrows():
-        marker = " ★" if row['symbol'] in top_symbols else ""
-        score = row.get('composite_score', 0)
-        print(f"  {idx:>3}. {row['symbol']}  评分={score:>7.2f}{marker}")
+    if mode == 'jys' and 'grade' in all_sorted.columns:
+        print(f"\n--- 全部候选评分 (★=入选) ---")
+        for idx, row in all_sorted.iterrows():
+            marker = " ★" if row['symbol'] in top_symbols else ""
+            score = row.get('composite_score', 0)
+            grade = row.get('grade', '')
+            name = row.get('name', '')
+            tech = row.get('tech_score', 0)
+            val = row.get('valuation_score', 0)
+            profit = row.get('profit_score', 0)
+            safety = row.get('safety_score', 0)
+            div = row.get('dividend_score', 0)
+            print(f"  {idx:>3}. {row['symbol']} {name:<8} "
+                  f"总分={score:>3} [{grade}] "
+                  f"技术={tech:>2} 估值={val:>2} 盈利={profit:>2} 安全={safety:>2} 分红={div:>1}{marker}")
+    else:
+        print(f"\n--- 全部候选评分 (★=入选) ---")
+        for idx, row in all_sorted.iterrows():
+            marker = " ★" if row['symbol'] in top_symbols else ""
+            score = row.get('composite_score', 0)
+            print(f"  {idx:>3}. {row['symbol']}  评分={score:>7.2f}{marker}")
 
 
 def print_search_result(result, searcher, data):
@@ -1018,6 +1069,9 @@ def main():
     parser.add_argument('--plot-engine', type=str, default=None, choices=['matplotlib', 'plotly'])
     parser.add_argument('--screen', action='store_true', default=None,
                         help='启用选股筛选')
+    parser.add_argument('--screen-mode', type=str, default=None,
+                        choices=['factor', 'jys'],
+                        help='选股模式: factor (因子筛选) / jys (五维评分)')
     parser.add_argument('--search', action='store_true', default=None,
                         help='启用策略搜索')
     args = parser.parse_args()

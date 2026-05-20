@@ -56,6 +56,11 @@ MyanAQuant/
 │   │   ├── meta_signal_collector.py # MetaSignalCollector 策略信号采集
 │   │   ├── meta_trainer.py        # MetaTrainer 训练/评估
 │   │   └── meta_strategy.py       # MetaStrategy 桥接回测引擎
+│   ├── stock_selection/            # 五维选股模块
+│   │   ├── tencent_fetcher.py     # 腾讯财经API数据获取（异步+同步）
+│   │   ├── jys_scorer.py          # 五维评分引擎（技术面+估值+盈利+安全+分红）
+│   │   ├── jys_screener.py        # 选股筛选器（对接portfolio pipeline）
+│   │   └── dividend_override.py   # 股息率人工修正数据
 │   └── visualization/            # 可视化模块
 │       ├── candlestick.py        # K线图 + 指标叠加 + 买卖点标注
 │       ├── equity.py             # 权益曲线 + 回撤图
@@ -63,6 +68,8 @@ MyanAQuant/
 ├── scripts/                      # 脚本
 │   ├── download_daily.py         # A股日线批量下载脚本
 │   ├── download_industry_stock.py # 行业-股票映射下载脚本
+│   ├── demo_portfolio.py         # Portfolio组合回测 Demo（含选股/搜索）
+│   ├── demo_jys_screen.py        # JYS五维选股 Demo
 │   ├── demo_dl_predict.py         # 深度学习收益率预测 Demo
 │   ├── demo_meta_strategy.py      # Meta Strategy 学习型组合策略 Demo
 │   └── watchdog_download.py      # 下载守护脚本（卡住自动重启）
@@ -313,6 +320,58 @@ result = BacktestEngine().run(meta, df, symbol="000807.SZ")
 | RSI | `(50 - RSI) / 50` |
 | Bollinger | `1 - 2×%B` (下轨=+1, 上轨=-1) |
 
+### 五维评分选股
+
+基于 JYSstock_analyzer 的沪深300五维评分选股（技术面30% + 估值25% + 盈利质量30% + 安全性10% + 分红5%），使用腾讯财经API获取实时基本面数据。
+
+```bash
+# 安装异步依赖（推荐，300只3秒完成 vs 同步73秒）
+pip install aiohttp
+
+# 全量沪深300选股，显示Top 10
+python3 scripts/demo_jys_screen.py
+
+# 指定参数
+python3 scripts/demo_jys_screen.py --top 5 --detail
+python3 scripts/demo_jys_screen.py --codes 601318,600519,600036
+python3 scripts/demo_jys_screen.py --min-score 50 --max-pe 25
+
+# 选股 → 策略回测 一条龙
+python3 scripts/demo_portfolio.py --screen --screen-mode jys --strategy ma macd rsi --vote-mode majority
+```
+
+```python
+from stock_selection import JYSScreener, JYSScorer
+
+# 一键选股：获取数据 → 五维评分 → 排名筛选
+screener = JYSScreener(top_n=10, min_score=40)
+top_df, all_df = screener.screen_all()
+print(top_df[['symbol', 'name', 'composite_score', 'grade']])
+
+# 单只股票评分
+scorer = JYSScorer()
+result = scorer.calculate_score({
+    'code': '601318', 'name': '中国平安', 'price': 54.0,
+    'change_pct': 2.5, 'momentum_20d': 8.0, 'turnover_rate': 1.5,
+    'pe_ratio': 7.4, 'pb_ratio': 0.96, 'roe': 13.0, 'dividend_yield': 2.36,
+})
+print(f"总分: {result.total_score} [{result.grade}]")
+print(f"技术={result.tech_score}/30 估值={result.valuation_score}/25 "
+      f"盈利={result.profit_score}/30 安全={result.safety_score}/10 分红={result.dividend_score}/5")
+```
+
+**五维评分体系** (满分100分):
+
+| 维度 | 满分 | 子项 |
+|------|------|------|
+| 技术面 | 30 | 日涨跌幅(10) + 20日动量(15) + 换手率(5) |
+| 估值面 | 25 | PE(10) + PB(10) + PR市赚率(5) |
+| 盈利质量 | 30 | ROE(15) + 利润增长(15) |
+| 安全性 | 10 | PB安全边际(3) + 股息稳定性(3) + 换手率波动(4) |
+| 分红 | 5 | 股息率 |
+
+> 详细文档: [docs/stock_selection.md](docs/stock_selection.md)
+
 ## 模块说明
 
 ### 数据获取模块 (`src/data/`)
@@ -342,6 +401,17 @@ result = BacktestEngine().run(meta, df, symbol="000807.SZ")
 | `MetaSignalCollector` | 策略信号采集器，运行子策略 score() 构建连续特征序列 |
 | `MetaTrainer` | Meta 训练器，训练后打印策略权重分布 |
 | `MetaStrategy` | Meta→回测桥接，滚动窗口维护 score 历史，推理输出 Signal |
+
+### 五维选股模块 (`src/stock_selection/`)
+
+| 类 | 说明 |
+|---|---|
+| `TencentFetcher` | 腾讯财经API数据获取器，支持异步(aiohttp, 3秒/300只)和同步(requests, 73秒/300只) |
+| `JYSScorer` | 五维评分引擎，技术面30+估值25+盈利质量30+安全性10+分红5，满分100 |
+| `JYSScoreResult` | 评分结果，含总分/评级(A+~D)/各维度子分/明细/原始数据 |
+| `JYSScreener` | 选股筛选器，组合TencentFetcher+JYSScorer，输出与StockScreener兼容的DataFrame |
+
+**评分体系**: 技术面(日涨跌幅+20日动量+换手率) + 估值面(PE+PB+PR市赚率) + 盈利质量(ROE+利润增长) + 安全性(PB安全边际+股息稳定性+换手率波动) + 分红(股息率)。详见 [docs/stock_selection.md](docs/stock_selection.md)。
 
 ### 策略模块 (`src/strategies/`)
 
@@ -500,9 +570,10 @@ logging:
 ## 技术栈
 
 - **语言**: Python 3.9+
-- **数据源**: Baostock（主力）, AkShare（日线备用）
+- **数据源**: Baostock（主力）, AkShare（日线备用）, 腾讯财经API（实时基本面/选股）
 - **数据分析**: Pandas, NumPy
 - **深度学习**: PyTorch (Transformer Decoder, Conv1D + Attention)
+- **异步并发**: aiohttp (五维选股, 3秒/300只)
 - **可视化**: Matplotlib, Plotly
 - **存储**: Parquet
 - **回测**: 自研回测引擎（向量化指标 + 逐 bar 信号）
