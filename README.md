@@ -56,6 +56,14 @@ MyanAQuant/
 │   │   ├── meta_signal_collector.py # MetaSignalCollector 策略信号采集
 │   │   ├── meta_trainer.py        # MetaTrainer 训练/评估
 │   │   └── meta_strategy.py       # MetaStrategy 桥接回测引擎
+│   ├── rl/                        # 强化学习模块
+│   │   ├── config.py              # RLConfig 配置
+│   │   ├── data_adapter.py        # DataAdapter per-stock→panel数据适配
+│   │   ├── factor_panel.py        # FactorPanelBuilder 296因子计算
+│   │   ├── inference.py           # RLInference ONNX推理
+│   │   ├── rl_strategy.py         # RLStrategy 截面选股策略(MultiStrategy)
+│   │   ├── env_factory.py         # EnvFactory Gym环境创建
+│   │   └── trainer.py             # RLTrainer PPO训练编排
 │   ├── stock_selection/            # 五维选股模块
 │   │   ├── tencent_fetcher.py     # 腾讯财经API数据获取（异步+同步）
 │   │   ├── jys_scorer.py          # 五维评分引擎（技术面+估值+盈利+安全+分红）
@@ -74,12 +82,14 @@ MyanAQuant/
 │   ├── demo_jys_screen.py        # JYS五维选股 Demo
 │   ├── demo_dl_predict.py         # 深度学习收益率预测 Demo
 │   ├── demo_meta_strategy.py      # Meta Strategy 学习型组合策略 Demo
+│   ├── demo_rl_portfolio.py       # RL 截面选股组合回测 Demo
 │   └── watchdog_download.py      # 下载守护脚本（卡住自动重启）
 ├── tests/                        # 测试 (566 用例)
 │   └── unit/                     # 单元测试
 │       ├── data/                 # 数据模块测试
 │       ├── analysis/             # 指标模块测试
 │       ├── dl/                   # 深度学习模块测试
+│       ├── rl/                   # 强化学习模块测试
 │       ├── strategies/           # 策略模块测试
 │       └── visualization/        # 可视化模块测试
 ├── config/
@@ -322,6 +332,42 @@ result = BacktestEngine().run(meta, df, symbol="000807.SZ")
 | RSI | `(50 - RSI) / 50` |
 | Bollinger | `1 - 2×%B` (下轨=+1, 上轨=-1) |
 
+### 强化学习截面选股
+
+```bash
+# 安装 RL 依赖
+pip install onnxruntime>=1.17
+pip install git+https://github.com/yupoet/aurumq-rl.git   # 训练需要
+
+# 构建面板 (数据准备, 只需运行一次)
+python3 scripts/demo_rl_portfolio.py --build-panel
+
+# 训练 RL 模型
+python3 scripts/demo_rl_portfolio.py --train --universe all --timesteps 100000
+
+# 使用预训练模型回测
+python3 scripts/demo_rl_portfolio.py --backtest --top-k 10 --rebalance-freq M
+```
+
+```python
+from rl import RLConfig, RLStrategy
+from strategies.portfolio_engine import PortfolioEngine, EqualWeightAllocation, RebalanceConfig
+
+config = RLConfig(
+    onnx_model_path="./checkpoints/rl/policy.onnx",
+    inference_top_k=10,
+    rebalance_freq="M",
+)
+
+strategy = RLStrategy(config)
+engine = PortfolioEngine(
+    allocation=EqualWeightAllocation(),
+    rebalance=RebalanceConfig(frequency="M"),
+)
+result = engine.run(strategy, data)
+print(f"Return: {result.total_return:.2%}, Sharpe: {result.sharpe_ratio:.2f}")
+```
+
 ### 五维评分选股
 
 基于 JYSstock_analyzer 的沪深300五维评分选股（技术面30% + 估值25% + 盈利质量30% + 安全性10% + 分红5%），使用腾讯财经API获取实时基本面数据。
@@ -413,11 +459,28 @@ streamlit run web/app.py
 | `MetaTrainer` | Meta 训练器，训练后打印策略权重分布 |
 | `MetaStrategy` | Meta→回测桥接，滚动窗口维护 score 历史，推理输出 Signal |
 
-### 五维选股模块 (`src/stock_selection/`)
+### 强化学习模块 (`src/rl/`)
+
+基于 PPO 的截面选股模块，与 DL 模块并行独立。使用 aurumq-rl 的 Deep-Sets 策略网络 + 296 因子库 (Alpha101 + GTJA191)，推理仅需 ONNX Runtime (~50MB)。
 
 | 类 | 说明 |
 |---|---|
-| `TencentFetcher` | 腾讯财经API数据获取器，支持异步(aiohttp, 3秒/300只)和同步(requests, 73秒/300只) |
+| `RLConfig` | RL 配置，含宇宙/因子/环境/PPO超参/推理/信号生成 |
+| `DataAdapter` | per-stock parquet → panel parquet 转换，桥接 myana-quant 存储与 aurumq-rl 格式 |
+| `FactorPanelBuilder` | 调用 aurumq-rl 因子库计算 296 因子，与 IndicatorSet 完全解耦 |
+| `RLInference` | ONNX Runtime CPU 推理封装，无需 PyTorch |
+| `RLStrategy` | `MultiStrategy` 子类，截面选股适配器，配合 PortfolioEngine 组合回测 |
+| `EnvFactory` | 创建 aurumq-rl Gym 环境 (StockPickingEnv / PortfolioWeightEnv) |
+| `RLTrainer` | SB3 PPO 训练编排，含面板构建/因子计算/环境创建/训练/ONNX导出 |
+
+```bash
+# 构建面板 → 训练 → 回测
+python3 scripts/demo_rl_portfolio.py --build-panel --train --backtest
+```
+
+> 详细文档: [docs/rl.md](docs/rl.md)
+
+### 五维选股模块 (`src/stock_selection/`)
 | `JYSScorer` | 五维评分引擎，技术面30+估值25+盈利质量30+安全性10+分红5，满分100 |
 | `JYSScoreResult` | 评分结果，含总分/评级(A+~D)/各维度子分/明细/原始数据 |
 | `JYSScreener` | 选股筛选器，组合TencentFetcher+JYSScorer，输出与StockScreener兼容的DataFrame |
@@ -439,6 +502,7 @@ streamlit run web/app.py
 | `CompositeStrategy` | 组合策略，支持 unanimous/any/majority 三种信号合并模式 |
 | `RiskManager` | 风控管理器：固定/ATR止损、追踪止损、固定/ATR止盈、仓位限制、回撤限制、日亏损限制 |
 | `PortfolioEngine` | 多标的组合回测引擎，支持普通 Strategy 和 MultiStrategy |
+| `DynamicAllocation` | 动态权重分配，供 RL 策略每轮再平衡时更新模型输出权重 |
 | `Optimizer` | 参数优化器：网格搜索/遗传/贝叶斯，自定义目标函数 |
 
 **内置策略示例** (`src/strategies/examples/`):
@@ -584,6 +648,7 @@ logging:
 - **数据源**: Baostock（主力）, AkShare（日线备用）, 腾讯财经API（实时基本面/选股）
 - **数据分析**: Pandas, NumPy
 - **深度学习**: PyTorch (Transformer Decoder, Conv1D + Attention)
+- **强化学习**: Stable-Baselines3 (PPO), ONNX Runtime, aurumq-rl (Deep-Sets, 296因子)
 - **异步并发**: aiohttp (五维选股, 3秒/300只)
 - **可视化**: Matplotlib, Plotly, Streamlit
 - **存储**: Parquet
@@ -598,6 +663,7 @@ pytest tests/ -v
 # 运行单个模块测试
 pytest tests/unit/strategies/ -v
 pytest tests/unit/dl/ -v
+pytest tests/unit/rl/ -v
 
 # 跳过需要 plotly 的测试
 pytest tests/ -v -k "not plotly"

@@ -124,6 +124,20 @@ class CustomAllocation:
         return self._weights.get(symbol, 0.0)
 
 
+class DynamicAllocation:
+    """可动态更新权重的分配, 供 RL 等策略每轮再平衡时设置模型输出权重"""
+
+    def __init__(self):
+        self._weights: Dict[str, float] = {}
+
+    def update_weights(self, weights: Dict[str, float]) -> None:
+        self._weights = weights
+
+    def allocate(self, symbol: str, signal: Signal, portfolio: Portfolio,
+                 current_price: float, target_symbols: List[str]) -> float:
+        return self._weights.get(symbol, 0.0)
+
+
 @dataclass
 class RebalanceConfig:
     """再平衡配置"""

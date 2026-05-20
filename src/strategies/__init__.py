@@ -32,6 +32,7 @@ def __getattr__(name):
         'MultiStrategy': '.portfolio_engine',
         'EqualWeightAllocation': '.portfolio_engine',
         'CustomAllocation': '.portfolio_engine',
+        'DynamicAllocation': '.portfolio_engine',
         'RebalanceConfig': '.portfolio_engine',
         'Optimizer': '.optimizer',
         'ParamRange': '.optimizer',
