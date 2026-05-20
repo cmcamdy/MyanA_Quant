@@ -1,0 +1,26 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python3 -c ' *)",
+      "Bash(python3 -m pytest tests/unit/analysis/ tests/unit/strategies/ -v --tb=short)",
+      "Bash(python3 -m pytest tests/unit/ -v --tb=short)",
+      "Read",
+      "Edit",
+      "Write",
+      "Bash(ls *)",
+      "Bash(head *)",
+      "Bash(tail *)",
+      "Bash(cat *)",
+      "Bash(find *)",
+      "Bash(grep *)",
+      "Bash(python3 *)",
+      "Bash(noahup *)",
+      "Bash(kill *)",
+      "Bash(ps *)",
+      "Bash(mkdir *)",
+      "Bash(pgrep *)",
+      "Bash(wc *)",
+      "Bash(jq *)"
+    ]
+  }
+}

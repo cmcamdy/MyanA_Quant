@@ -1,0 +1,41 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# Data & models (large files)
+data/
+checkpoints/
+*.pt
+*.pth
+*.h5
+*.pkl
+
+# Logs & output
+logs/
+output/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# pytest
+.pytest_cache/
+
+# Env files
+.env
+
+# OS
+.DS_Store
