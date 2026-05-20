@@ -78,7 +78,7 @@ class MetaStrategy(Strategy):
             window=self.config.window,
             hidden_dim=self.config.hidden_dim,
             dropout=self.config.dropout,
-            strategy_prior=self.config.strategy_prior,
+            strategy_prior=prior,
         ).to(self._device)
 
         best_path = checkpoint_dir / "best_model.pt"
