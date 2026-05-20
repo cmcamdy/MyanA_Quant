@@ -1,21 +1,58 @@
-# 五维选股模块 (`src/stock_selection/`)
+# 选股模块 (`src/stock_selection/`)
 
 ## 模块概述
 
-基于 JYSstock_analyzer 项目集成的五维评分选股模块，支持 **A股全量（~5000只）+ 港股通（~800只）**，通过腾讯财经API获取实时基本面数据，从技术面、估值、盈利质量、安全性、分红五个维度综合评分选股。异步并发模式下全量分析仅需15-20秒。
+多策略选股模块，统一接口支持多种选股方法，共享腾讯财经API数据获取和股票池加载。当前支持：
 
-> 参考: [https://github.com/stevenwxz/JYSstock_analyzer](https://github.com/stevenwxz/JYSstock_analyzer)
+| 方法 | 核心逻辑 | 适用场景 |
+|------|----------|----------|
+| **JYS 五维评分** | PE/PB/ROE/股息 + 技术面综合评分 | 价值投资，低估值好公司 |
+| **因子筛选** | 技术因子 z-score 标准化 + 加权 | 历史回测中的标的筛选 |
+| **Minervini 趋势** | Stage 2 上升趋势 + VCP形态 + 相对强度 | 趋势跟踪，强势突破股 |
+
+> JYS 参考: [https://github.com/stevenwxz/JYSstock_analyzer](https://github.com/stevenwxz/JYSstock_analyzer)
+> 趋势 参考: [https://github.com/RyanJHamby/stock-screener](https://github.com/RyanJHamby/stock-screener)
 
 ## 模块架构
 
 ```
 src/stock_selection/
 ├── __init__.py             # 模块导出
+├── base.py                 # ScreenerBase 抽象基类
+├── registry.py             # 选股方法注册表 + create_screener() 工厂
 ├── tencent_fetcher.py      # 腾讯财经API数据获取（异步+同步）
-├── jys_scorer.py           # 五维评分引擎（核心）
-├── jys_screener.py         # 选股筛选器（对接portfolio pipeline）
+├── jys_scorer.py           # 五维评分引擎
+├── jys_screener.py         # 五维选股筛选器 (ScreenerBase)
+├── factor_adapter.py       # 因子筛选器适配器 (ScreenerBase)
+├── trend_scorer.py         # Minervini趋势评分引擎
+├── trend_screener.py       # 趋势选股筛选器 (ScreenerBase)
 └── dividend_override.py    # 股息率人工修正数据
 ```
+
+### 统一接口
+
+所有选股方法继承 `ScreenerBase`，通过 `create_screener()` 工厂创建：
+
+```python
+from stock_selection import create_screener, available_methods
+
+# 查看可用方法
+print(available_methods())  # ['factor', 'jys']
+
+# 创建筛选器
+screener = create_screener("jys", top_n=10, market="all")
+top_df, all_df = screener.screen_all()
+
+# 或直接实例化
+from stock_selection import JYSScreener
+screener = JYSScreener(top_n=10)
+top_df, all_df = screener.screen_all()
+```
+
+### 新增选股方法
+
+1. 继承 `ScreenerBase`，实现 `screen_all()` 方法
+2. 在 `registry.py` 中调用 `register_screener("name", factory)` 注册
 
 ## 核心组件
 

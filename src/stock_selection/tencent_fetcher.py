@@ -577,6 +577,58 @@ def _parse_history(raw: str, symbol: str) -> Optional[Dict]:
         return None
 
 
+def _parse_history_ohlcv(raw: str, symbol: str) -> Optional[pd.DataFrame]:
+    """解析腾讯历史K线数据为 OHLCV DataFrame
+
+    Returns:
+        DataFrame with columns: date, open, close, high, low, volume
+        或 None（解析失败）
+    """
+    try:
+        prefix = "kline_dayqfq="
+        idx = raw.find(prefix)
+        if idx < 0:
+            return None
+        json_str = raw[idx + len(prefix):]
+        data = json.loads(json_str)
+
+        stock_data = data.get("data", {})
+        day_kline = None
+        for key in stock_data:
+            if "day" in stock_data[key]:
+                day_kline = stock_data[key]["day"]
+                break
+            if "qfqday" in stock_data[key]:
+                day_kline = stock_data[key]["qfqday"]
+                break
+
+        if not day_kline or len(day_kline) < 2:
+            return None
+
+        rows = []
+        for k in day_kline:
+            if len(k) < 6:
+                continue
+            try:
+                rows.append({
+                    "date": k[0],
+                    "open": float(k[1]),
+                    "close": float(k[2]),
+                    "high": float(k[3]),
+                    "low": float(k[4]),
+                    "volume": float(k[5]) if k[5] else 0,
+                })
+            except (ValueError, IndexError):
+                continue
+
+        if not rows:
+            return None
+        return pd.DataFrame(rows)
+    except Exception as e:
+        logger.debug(f"解析OHLCV数据失败 {symbol}: {e}")
+        return None
+
+
 # ---------------------------------------------------------------------------
 # 同步获取器 (requests)
 # ---------------------------------------------------------------------------
@@ -636,6 +688,29 @@ class _SyncFetcher:
                         time.sleep(0.5 * (2 ** attempt))
                     else:
                         logger.debug(f"获取历史数据失败 {code}: {e}")
+        return results
+
+    def fetch_history_ohlcv(self, codes: List[str], days: int = 230) -> Dict[str, pd.DataFrame]:
+        """获取多只股票的 OHLCV 历史K线"""
+        import requests
+
+        results = {}
+        for code in codes:
+            symbol = _code_to_symbol(code)
+            url = _HISTORY_URL.format(symbol=symbol, days=days)
+            for attempt in range(self.retry_times):
+                try:
+                    resp = requests.get(url, headers={**_HEADERS, "User-Agent": random.choice(_USER_AGENTS)},
+                                        timeout=15)
+                    df = _parse_history_ohlcv(resp.text, symbol)
+                    if df is not None and not df.empty:
+                        results[code] = df
+                    break
+                except Exception as e:
+                    if attempt < self.retry_times - 1:
+                        time.sleep(0.5 * (2 ** attempt))
+                    else:
+                        logger.debug(f"获取OHLCV数据失败 {code}: {e}")
         return results
 
 
@@ -812,3 +887,38 @@ class TencentFetcher:
         elapsed = time.time() - t0
         logger.info(f"数据获取完成(同步): {len(realtime)} 只, 耗时 {elapsed:.1f}s")
         return realtime
+
+    # ---- OHLCV 历史数据 (趋势选股用) ----
+
+    def fetch_history_ohlcv_sync(self, codes: List[str], days: int = 230) -> Dict[str, pd.DataFrame]:
+        """同步获取多只股票的 OHLCV 历史K线
+
+        Args:
+            codes: 股票代码列表
+            days: 历史天数 (默认230, 足够计算SMA200)
+
+        Returns:
+            {code: DataFrame(columns=date,open,close,high,low,volume)}
+        """
+        return self._sync_fetcher.fetch_history_ohlcv(codes, days)
+
+    def fetch_index_history_sync(self, index_code: str = "sh000001", days: int = 230) -> Optional[pd.DataFrame]:
+        """同步获取指数历史K线
+
+        Args:
+            index_code: 指数代码 (如 sh000001=上证, sz399001=深证, sz399006=创业板)
+            days: 历史天数
+
+        Returns:
+            OHLCV DataFrame 或 None
+        """
+        import requests
+
+        url = _HISTORY_URL.format(symbol=index_code, days=days)
+        headers = {**_HEADERS, "User-Agent": random.choice(_USER_AGENTS)}
+        try:
+            resp = requests.get(url, headers=headers, timeout=15)
+            return _parse_history_ohlcv(resp.text, index_code)
+        except Exception as e:
+            logger.warning(f"获取指数历史数据失败 {index_code}: {e}")
+            return None

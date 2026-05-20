@@ -10,13 +10,14 @@ from typing import Dict, List, Optional, Tuple
 
 import pandas as pd
 
+from .base import ScreenerBase
 from .tencent_fetcher import TencentFetcher, load_codes_by_market, _format_code
 from .jys_scorer import JYSScorer, JYSScoreResult
 
 logger = logging.getLogger(__name__)
 
 
-class JYSScreener:
+class JYSScreener(ScreenerBase):
     """JYS五维选股筛选器
 
     Args:
@@ -95,7 +96,7 @@ class JYSScreener:
         top, _ = self.screen_all(codes)
         return top
 
-    def screen_all(self, codes: Optional[List[str]] = None) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    def screen_all(self, codes: Optional[List[str]] = None, **kwargs) -> Tuple[pd.DataFrame, pd.DataFrame]:
         """选股筛选，返回 (Top N, 全部候选)
 
         Args:

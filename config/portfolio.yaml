@@ -93,40 +93,53 @@ min_bars: 20
 # ============================================================
 screening:
   enabled: false
-  # 选股模式: factor (原有因子筛选) / jys (五维评分筛选)
-  mode: factor
-  # JYS五维评分配置 (mode: jys 时生效)
+  # 选股方法: jys (五维评分) / factor (因子筛选) / trend (Minervini趋势)
+  method: jys
+
+  # JYS 五维评分配置 (method: jys)
   jys:
     top_n: 10
     min_score: 40
     max_pe: 30
     min_turnover: 0.3
     market: all    # all(A股+港股通) / a(仅A股) / hk(仅港股通) / csi300(沪深300)
-  # Factor 类因子
-  factors:
-    momentum: {period: 20}
-    volatility: {period: 20}
-    bias: {period: 20}
-  # 指标因子 (通过 IndicatorSet 计算)
-  indicator_factors:
-    ma_alignment: true      # MA多头排列得分 (5>10>20>60)
-    atr_price_ratio: true   # ATR/close 归一化波动率
-    obv_direction: true     # OBV趋势方向
-    avg_volume: true        # 20日均量 (流动性)
-  # 复合评分权重 (负值=越低越好)
-  weights:
-    momentum_20: 0.25
-    volatility_20: -0.15
-    bias_20: 0.15
-    ma_alignment: 0.20
-    obv_direction: 0.10
-    atr_price_ratio: -0.15
-  # 规则过滤 (先过滤再打分)
-  filters:
-    avg_volume: {min: 1000000}     # 日均量 > 100万
-    momentum_20: {min: -0.2}       # 动量不要太差
-  # 筛选数量
-  top_n: 20
+
+  # 因子筛选配置 (method: factor)
+  factor:
+    top_n: 20
+    min_bars: 60
+    # Factor 类因子
+    factors:
+      momentum: {period: 20}
+      volatility: {period: 20}
+      bias: {period: 20}
+    # 指标因子 (通过 IndicatorSet 计算)
+    indicator_factors:
+      ma_alignment: true      # MA多头排列得分 (5>10>20>60)
+      atr_price_ratio: true   # ATR/close 归一化波动率
+      obv_direction: true     # OBV趋势方向
+      avg_volume: true        # 20日均量 (流动性)
+    # 复合评分权重 (负值=越低越好)
+    weights:
+      momentum_20: 0.25
+      volatility_20: -0.15
+      bias_20: 0.15
+      ma_alignment: 0.20
+      obv_direction: 0.10
+      atr_price_ratio: -0.15
+    # 规则过滤 (先过滤再打分)
+    filters:
+      avg_volume: {min: 1000000}     # 日均量 > 100万
+      momentum_20: {min: -0.2}       # 动量不要太差
+
+  # Minervini 趋势选股配置 (method: trend)
+  trend:
+    top_n: 10
+    min_score: 50
+    market: csi300       # 趋势选股推荐 csi300（SMA200 需要大量历史数据）
+    benchmark: sh000001  # 基准指数: sh000001(上证) / sz399001(深证) / sz399006(创业板)
+    sma_periods: [50, 150, 200]
+    min_criteria_pass: 7  # Minervini 8条件中至少通过7条
 
 # ============================================================
 # 策略搜索 (python3 scripts/demo_portfolio.py --search)
