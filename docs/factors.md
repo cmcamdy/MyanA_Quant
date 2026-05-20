@@ -8,10 +8,11 @@
 
 ```
 src/factors/
-├── base.py      # Factor 基类 + FactorResult 结果数据类
-├── factors.py   # 6 个内置因子实现
-├── analyzer.py  # FactorAnalyzer 因子评估器
-└── screener.py  # FactorScreener 因子筛选器
+├── base.py       # Factor 基类 + FactorResult 结果数据类
+├── factors.py    # 6 个基础因子实现
+├── alpha101.py   # 13 个 Alpha101 因子实现（波动率/价量/突破/动量/反转）
+├── analyzer.py   # FactorAnalyzer 因子评估器
+└── screener.py   # FactorScreener 因子筛选器
 ```
 
 ## 核心组件
@@ -51,6 +52,97 @@ class FactorResult:
 | 反转因子 | `ReversalFactor` | `-close.pct_change(p)` | period=5 |
 | 价量相关因子 | `PriceVolumeFactor` | `price_pct.corr(volume_pct).rolling(p)` | period=10 |
 | 乖离率因子 | `BiasFactor` | `(close - MA) / MA` | period=20 |
+
+### Alpha101 因子（`src/factors/alpha101.py`）
+
+基于 WorldQuant Alpha101 论文选取的高 IC 因子，仅需 OHLCV + amount 数据。
+原始公式中的截面排名 rank() 用时间序列排名 ts_rank() 替代，截面标准化可在选股层面统一处理。
+
+#### 波动率类
+
+| 因子 | 类名 | 公式 | 默认参数 | 与基础因子的关系 |
+|------|------|------|----------|------------------|
+| 波动率异常因子 | `Alpha001Factor` | `ts_rank(std(close - MA(close, n)), m)` | mean_window=5, rank_window=20 | VolatilityFactor 的相对变化版 |
+| 偏度反转因子 | `SkewReversalFactor` | `-ts_rank(skew(returns), n)` | window=20, rank_window=20 | 三阶矩（不对称性），VolatilityFactor 是二阶矩 |
+| 峰度过滤因子 | `KurtFilterFactor` | `-ts_rank(kurt(returns), n)` | window=20, rank_window=20 | 四阶矩（厚尾），与 VolatilityFactor + SkewReversalFactor 形成「分布三件套」 |
+
+#### 价量类
+
+| 因子 | 类名 | 公式 | 默认参数 | 与基础因子的关系 |
+|------|------|------|----------|------------------|
+| 量价趋势因子 | `Alpha005Factor` | `ts_rank(close*volume, n) 的 n 日变化` | window=10 | 度量资金流趋势方向，PriceVolumeFactor 只看相关性 |
+| 开盘收盘反转因子 | `Alpha014Factor` | `corr(close-open, close-close.shift(1), n)` | window=10 | 区分日内与隔夜反转，ReversalFactor 不区分 |
+| 日内效率因子 | `Alpha015Factor` | `sum(close-open, n) / sum(high-low, n)` | window=20 | 衡量趋势质量（净涨幅/总振幅），全新维度 |
+
+#### 突破类
+
+| 因子 | 类名 | 公式 | 默认参数 | 与基础因子的关系 |
+|------|------|------|----------|------------------|
+| 新高突破因子 | `Alpha023Factor` | `close >= rolling_max(close, n)` → 1/0 | window=20 | 离散事件信号，MomentumFactor 是连续信号 |
+| OBV 动量交叉因子 | `Alpha054Factor` | `ts_rank(OBV - MA(OBV, n), m)` | obv_ma_window=20, rank_window=20 | 度量 OBV 偏离强度，obv_direction 只看方向 |
+
+#### 动量类
+
+| 因子 | 类名 | 公式 | 默认参数 | 与基础因子的关系 |
+|------|------|------|----------|------------------|
+| 上涨胜率因子 | `Alpha084Factor` | `mean(close > prev_close, n)` | window=20 | 度量方向一致性，MomentumFactor 度量涨幅大小 |
+| 衰减线性动量因子 | `DecayLinearMomFactor` | `decay_linear(daily_return, n)` | window=10 | 近期权重更大的动量，对趋势加速更敏感 |
+
+#### 反转类
+
+| 因子 | 类名 | 公式 | 默认参数 | 与基础因子的关系 |
+|------|------|------|----------|------------------|
+| 下影线反转因子 | `Alpha033Factor` | `ts_rank((low-close)/(high-low), n)` | window=20 | 利用 K 线形态，ReversalFactor 只用收盘价 |
+| 缩量反转因子 | `Alpha041Factor` | `ts_rank(Δclose², n) * ts_rank(-volume, n)` | window=20 | 缩量急跌后反转信号，引入量能过滤 |
+| 短期 Z-Score 反转因子 | `ZscoreReversalFactor` | `-(close-MA)/std` | window=5 | 标准化后的反转，在不同波动率环境下可比 |
+
+```python
+from factors import Alpha001Factor, SkewReversalFactor, ZscoreReversalFactor
+
+# 使用默认参数
+alpha001 = Alpha001Factor()
+values = alpha001.compute(df)  # pd.Series, name='alpha001_5_20'
+
+# 自定义参数
+skew = SkewReversalFactor(window=10, rank_window=20)
+zscore = ZscoreReversalFactor(window=10)
+```
+
+### 辅助函数
+
+`alpha101.py` 导出两个辅助函数，也可在自定义因子中复用：
+
+| 函数 | 说明 |
+|------|------|
+| `_ts_rank(series, window)` | 时间序列百分位排名：当前值在过去 window 期中的排名位置 (0~1) |
+| `_decay_linear(series, window)` | 线性衰减加权平均：越近的数据权重越大 [1,2,...,n]/sum |
+
+## 配置示例
+
+在 `config/portfolio.yaml` 的 `screening.factors` 中可直接使用新因子：
+
+```yaml
+screening:
+  factors:
+    momentum: {period: 20}
+    volatility: {period: 20}
+    alpha001: {mean_window: 5, rank_window: 20}
+    skew_reversal: {window: 20}
+    alpha015: {window: 20}
+    alpha023: {window: 20}
+    decay_linear_mom: {window: 10}
+    zscore_reversal: {window: 5}
+  weights:
+    momentum_20: 0.15
+    alpha001_5_20: 0.10
+    skew_reversal_20: 0.10
+    alpha015_20: 0.10
+    alpha023_20: 0.05
+    decay_linear_mom_10: 0.15
+    zscore_reversal_5: 0.10
+    volatility_20: -0.10
+    ma_alignment: 0.15
+```
 
 ```python
 from factors import MomentumFactor, VolatilityFactor, BiasFactor

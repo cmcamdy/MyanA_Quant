@@ -13,14 +13,40 @@ from factors.factors import (
     MomentumFactor, VolatilityFactor, TurnoverFactor,
     ReversalFactor, PriceVolumeFactor, BiasFactor,
 )
+from factors.alpha101 import (
+    Alpha001Factor, SkewReversalFactor, KurtFilterFactor,
+    Alpha005Factor, Alpha014Factor, Alpha015Factor,
+    Alpha023Factor, Alpha054Factor,
+    Alpha084Factor, DecayLinearMomFactor,
+    Alpha033Factor, Alpha041Factor, ZscoreReversalFactor,
+)
 
 FACTOR_CLASSES = {
+    # 基础因子
     'momentum': MomentumFactor,
     'volatility': VolatilityFactor,
     'turnover': TurnoverFactor,
     'reversal': ReversalFactor,
     'price_volume': PriceVolumeFactor,
     'bias': BiasFactor,
+    # Alpha101 因子 — 波动率类
+    'alpha001': Alpha001Factor,
+    'skew_reversal': SkewReversalFactor,
+    'kurt_filter': KurtFilterFactor,
+    # Alpha101 因子 — 价量类
+    'alpha005': Alpha005Factor,
+    'alpha014': Alpha014Factor,
+    'alpha015': Alpha015Factor,
+    # Alpha101 因子 — 突破类
+    'alpha023': Alpha023Factor,
+    'alpha054': Alpha054Factor,
+    # Alpha101 因子 — 动量类
+    'alpha084': Alpha084Factor,
+    'decay_linear_mom': DecayLinearMomFactor,
+    # Alpha101 因子 — 反转类
+    'alpha033': Alpha033Factor,
+    'alpha041': Alpha041Factor,
+    'zscore_reversal': ZscoreReversalFactor,
 }
 
 
