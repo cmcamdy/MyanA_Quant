@@ -31,11 +31,19 @@ MyanAQuant/
 │   │   ├── result.py             # BacktestResult, TradeRecord, 绩效指标
 │   │   ├── sizers.py             # PositionSizer, FixedSizer, AllInSizer
 │   │   ├── composite.py          # CompositeStrategy 组合策略
-│   │   └── examples/             # 策略示例
+│   │   ├── examples/             # 策略示例 (12个)
 │   │       ├── ma_cross.py       # 双均线交叉策略
+│   │       ├── macd.py           # MACD 交叉策略
 │   │       ├── sar.py            # SAR 抛物线策略
 │   │       ├── rsi.py            # RSI 超买超卖策略
-│   │       └── bollinger.py      # 布林带策略
+│   │       ├── kdj.py            # KDJ 随机指标策略
+│   │       ├── wr.py             # 威廉 %R 策略
+│   │       ├── cci.py            # CCI 商品通道策略
+│   │       ├── bollinger.py      # 布林带策略
+│   │       ├── keltner.py        # 肯特纳通道策略
+│   │       ├── obv.py            # OBV 能量潮策略
+│   │       ├── mfi.py            # MFI 资金流量策略
+│   │       └── vwap.py           # VWAP 成交量加权价策略
 │   ├── dl/                        # 深度学习模块
 │   │   ├── config.py              # DLConfig 配置（回归模式）
 │   │   ├── feature_builder.py     # FeatureBuilder 特征工程
@@ -357,9 +365,17 @@ result = BacktestEngine().run(meta, df, symbol="000807.SZ")
 | 策略 | on_bar 触发条件 | score() 含义 |
 |------|----------------|-------------|
 | `MACrossStrategy` | 金叉/死叉 | MA 偏离度 |
+| `MACDStrategy` | DIF/DEA 交叉 | (DIF-DEA)/close |
 | `SARStrategy` | SAR 趋势翻转 | 趋势方向 × 距离 |
 | `RSIStrategy` | RSI 超买/超卖 | (50-RSI)/50 |
+| `KDJStrategy` | K/D 交叉 + J 值极值 | (50-J)/50 |
+| `WRStrategy` | WR 超买/超卖 | (-50-WR)/50 |
+| `CCIStrategy` | CCI 通道外极值 | -CCI/100 |
 | `BollingerStrategy` | 触及上下轨 | 1-2×%B |
+| `KeltnerStrategy` | 触及上下轨 | 1-2×%K |
+| `OBVStrategy` | OBV 穿越均线 | OBV 偏离 MA |
+| `MFIStrategy` | MFI 超买/超卖 | (50-MFI)/50 |
+| `VWAPStrategy` | 价格偏离 VWAP | -gap/vwap |
 
 **回测流程：**
 1. `strategy.on_init(ctx)` — 注册指标依赖

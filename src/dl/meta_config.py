@@ -38,9 +38,13 @@ class MetaConfig:
     # 断点续训
     resume: bool = False
 
-    # 回测信号阈值
+    # 回测信号模式
+    signal_mode: str = "adaptive"  # "fixed" 或 "adaptive"
     buy_threshold: float = 0.002
     sell_threshold: float = -0.002
+    adaptive_window: int = 60     # 自适应信号的历史窗口
+    buy_percentile: float = 0.8   # 预测值高于历史 80% 分位则买入
+    sell_percentile: float = 0.2  # 预测值低于历史 20% 分位则卖出
 
     @property
     def num_strategies(self) -> int:

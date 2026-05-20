@@ -25,6 +25,11 @@ class MetaStrategy(Strategy):
     """学习型组合策略
 
     用注意力机制学习子策略权重，动态决定看多/看空倾向。
+
+    信号模式:
+      - fixed: 绝对阈值，pred > buy_threshold → BUY, pred < sell_threshold → SELL
+      - adaptive: 自适应百分位，pred 高于历史 buy_percentile 分位 → BUY，
+        低于 sell_percentile 分位 → SELL
     """
 
     def __init__(
@@ -42,6 +47,7 @@ class MetaStrategy(Strategy):
         self._collector: Optional[MetaSignalCollector] = None
         self._device = None
         self._score_history: Optional[deque] = None
+        self._pred_history: Optional[deque] = None
         self._bar_count = 0
         self._loaded = False
 
@@ -80,6 +86,7 @@ class MetaStrategy(Strategy):
 
         # 初始化分数历史
         self._score_history = deque(maxlen=self.config.window)
+        self._pred_history = deque(maxlen=self.config.adaptive_window)
 
         self._loaded = True
         logger.info(f"MetaStrategy 加载完成, {self.config.num_strategies} 个子策略")
@@ -129,11 +136,56 @@ class MetaStrategy(Strategy):
         if self._bar_count <= 5 or self._bar_count % 50 == 0:
             logger.info(
                 f"Bar#{self._bar_count} Meta预测={pred_return:.6f}, "
-                f"阈值=[{self.sell_threshold:.4f}, {self.buy_threshold:.4f}], "
+                f"模式={self.config.signal_mode}, "
                 f"权重={np.round(weights, 3).tolist()}"
             )
 
+        # 记录预测值用于自适应信号
+        self._pred_history.append(pred_return)
+
         # 生成信号
+        if self.config.signal_mode == "adaptive":
+            return self._adaptive_signal(pred_return, weights, context)
+        else:
+            return self._fixed_signal(pred_return, weights, context)
+
+    def _adaptive_signal(self, pred_return: float, weights: np.ndarray, context: Context) -> Signal:
+        """自适应百分位信号: 预测值在历史中的相对位置决定信号"""
+        if len(self._pred_history) < 20:
+            return Signal(
+                type=SignalType.HOLD, symbol=context.symbol,
+                reason=f"Meta预测={pred_return:.4f}, 历史不足",
+            )
+
+        hist = np.array(self._pred_history)
+        buy_line = np.percentile(hist, self.config.buy_percentile * 100)
+        sell_line = np.percentile(hist, self.config.sell_percentile * 100)
+
+        if pred_return >= buy_line:
+            # 在历史中排名越高，信号越强
+            rank = np.searchsorted(np.sort(hist), pred_return) / len(hist)
+            strength = max(rank, 0.2)
+            return Signal(
+                type=SignalType.BUY, symbol=context.symbol,
+                strength=strength,
+                reason=f"Meta预测={pred_return:.4f}, 高于{self.config.buy_percentile:.0%}分位({buy_line:.4f})",
+            )
+        elif pred_return <= sell_line:
+            rank = 1.0 - np.searchsorted(np.sort(hist), pred_return) / len(hist)
+            strength = max(rank, 0.2)
+            return Signal(
+                type=SignalType.SELL, symbol=context.symbol,
+                strength=strength,
+                reason=f"Meta预测={pred_return:.4f}, 低于{self.config.sell_percentile:.0%}分位({sell_line:.4f})",
+            )
+
+        return Signal(
+            type=SignalType.HOLD, symbol=context.symbol,
+            reason=f"Meta预测={pred_return:.4f}, 分位区间[{sell_line:.4f}, {buy_line:.4f}]",
+        )
+
+    def _fixed_signal(self, pred_return: float, weights: np.ndarray, context: Context) -> Signal:
+        """固定阈值信号"""
         if pred_return > self.buy_threshold:
             strength = min(pred_return / 0.05, 1.0)
             return Signal(

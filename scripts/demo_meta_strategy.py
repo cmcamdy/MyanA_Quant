@@ -131,6 +131,7 @@ def run_backtest(args):
         early_stopping_patience=10,
         buy_threshold=args.buy_threshold,
         sell_threshold=args.sell_threshold,
+        signal_mode=args.signal_mode,
     )
 
     # 先训练
@@ -183,9 +184,12 @@ def main():
     parser.add_argument('--end-date', type=str, default=None,
                         help='数据截止日期 (如 2026-01-01)')
     parser.add_argument('--buy-threshold', type=float, default=0.002,
-                        help='买入阈值 (预测收益率超过此值则买入, 默认0.002=0.2%%)')
+                        help='买入阈值 (fixed模式下生效, 默认0.002=0.2%%)')
     parser.add_argument('--sell-threshold', type=float, default=-0.002,
-                        help='卖出阈值 (预测收益率低于此值则卖出, 默认-0.002=-0.2%%)')
+                        help='卖出阈值 (fixed模式下生效, 默认-0.002=-0.2%%)')
+    parser.add_argument('--signal-mode', type=str, default='adaptive',
+                        choices=['fixed', 'adaptive'],
+                        help='信号模式: fixed=固定阈值, adaptive=自适应百分位(推荐)')
     parser.add_argument('--backtest', action='store_true')
     args = parser.parse_args()
 
