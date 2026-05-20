@@ -281,37 +281,9 @@ all_data = all_overrides()  # Dict[str, Dict]
 
 **修正机制**: `JYSScorer.calculate_score()` 自动应用override，无需手动调用。对API数据中股息率异常的股票（如中国人寿API返回5.49%实际为1.48%），用修正值替换。**注意：override仅应用于A股**，港股API字段[47]返回的股息率可靠，直接使用。
 
-## 与 Portfolio Pipeline 集成
+## 使用方式
 
-### 方式1: 命令行
-
-```bash
-# JYS五维选股 → 策略回测
-python3 scripts/demo_portfolio.py --screen --screen-mode jys --strategy ma
-
-# JYS选股 + 多策略投票
-python3 scripts/demo_portfolio.py --screen --screen-mode jys --strategy ma macd rsi --vote-mode majority
-
-# 指定股票池
-python3 scripts/demo_portfolio.py --screen --screen-mode jys --symbols 601318.SH,600519.SH --strategy ma
-```
-
-### 方式2: YAML配置
-
-```yaml
-# config/portfolio.yaml
-screening:
-  enabled: true
-  mode: jys                    # factor(因子筛选) 或 jys(五维评分)
-  jys:
-    top_n: 10                  # 选前10只
-    min_score: 40              # 最低综合分
-    max_pe: 30                 # 最大PE
-    min_turnover: 0.3          # 最低换手率%
-    market: all                # all(A股+港股通) / a / hk / csi300
-```
-
-### 方式3: 独立运行脚本
+### 方式1: 独立运行脚本（推荐）
 
 ```bash
 # A股+港股通全量选股 (默认)
@@ -332,7 +304,7 @@ python3 scripts/demo_jys_screen.py --codes 601318,600519,00700,09988
 python3 scripts/demo_jys_screen.py --min-score 50 --max-pe 25
 ```
 
-### 方式4: Python API
+### 方式2: Python API
 
 ```python
 from stock_selection import JYSScreener
@@ -344,6 +316,21 @@ top_df, all_df = screener.screen_all()
 # 选出的标的直接用于回测
 symbols = top_df['symbol'].tolist()
 # → ["600887.SH", "000333.SZ", "601318.SH", ...]
+```
+
+### 方式3: YAML配置（与 Portfolio Pipeline 集成）
+
+```yaml
+# config/portfolio.yaml
+screening:
+  enabled: true
+  mode: jys                    # factor(因子筛选) 或 jys(五维评分)
+  jys:
+    top_n: 10                  # 选前10只
+    min_score: 40              # 最低综合分
+    max_pe: 30                 # 最大PE
+    min_turnover: 0.3          # 最低换手率%
+    market: all                # all(A股+港股通) / a / hk / csi300
 ```
 
 ## 与原有因子选股的对比

@@ -335,9 +335,6 @@ python3 scripts/demo_jys_screen.py
 python3 scripts/demo_jys_screen.py --top 5 --detail
 python3 scripts/demo_jys_screen.py --codes 601318,600519,600036
 python3 scripts/demo_jys_screen.py --min-score 50 --max-pe 25
-
-# 选股 → 策略回测 一条龙
-python3 scripts/demo_portfolio.py --screen --screen-mode jys --strategy ma macd rsi --vote-mode majority
 ```
 
 ```python
