@@ -54,6 +54,7 @@ class DLConfig:
     epochs: int = 50
     early_stopping_patience: int = 5
     loss_type: str = "huber"  # "mse" | "huber" | "mae"
+    huber_delta: float = 1.0  # Huber loss 的 delta (归一化标签后，1.0 = 1个标准差)
 
     # 路径
     checkpoint_dir: str = "./checkpoints"

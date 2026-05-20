@@ -25,13 +25,13 @@ from .model import PricePredictor
 logger = logging.getLogger("dl.trainer")
 
 
-def _create_criterion(loss_type: str) -> nn.Module:
+def _create_criterion(loss_type: str, huber_delta: float = 1.0) -> nn.Module:
     if loss_type == "mse":
         return nn.MSELoss()
     elif loss_type == "mae":
         return nn.L1Loss()
     elif loss_type == "huber":
-        return nn.HuberLoss(delta=0.01)
+        return nn.HuberLoss(delta=huber_delta)
     else:
         raise ValueError(f"未知 loss_type: {loss_type}, 可选: mse, mae, huber")
 
@@ -59,7 +59,7 @@ class Trainer:
         return model.to(self.device)
 
     def _split_dataset(self, dataset: StockDataset, stock_boundaries: List[Tuple[str, int, int]]):
-        """每只股票内部按时间顺序划分 train/val/test"""
+        """每只股票内部按时间顺序划分 train/val/test，返回 Subset 和原始索引"""
         train_indices = []
         val_indices = []
         test_indices = []
@@ -80,7 +80,7 @@ class Trainer:
             f"数据划分 (按时间): train={len(train_indices)}, val={len(val_indices)}, test={len(test_indices)} | "
             f"股票数: {len(stock_boundaries)}"
         )
-        return train_ds, val_ds, test_ds
+        return train_ds, val_ds, test_ds, train_indices, val_indices, test_indices
 
     def _train_epoch(self, model: nn.Module, loader: DataLoader, optimizer, criterion, pbar=None):
         model.train()
@@ -132,21 +132,41 @@ class Trainer:
         """完整训练流程"""
         logger.info(f"开始训练 (回归模式), 设备: {self.device}")
 
-        # 构建数据
-        features, labels, _, stock_boundaries = self.builder.build_all(symbols)
+        # 构建数据 (不做标准化，由 Trainer 在训练集上 fit)
+        features, labels, _, stock_boundaries = self.builder.build_all(
+            symbols, normalize_features=False
+        )
         num_features = features.shape[1]
         logger.info(f"特征维度: {num_features} × {self.config.window} = {num_features * self.config.window}")
 
-        # 创建数据集并划分
+        # 划分数据
         dataset = StockDataset(features, labels)
-        train_ds, val_ds, test_ds = self._split_dataset(dataset, stock_boundaries)
+        train_ds, val_ds, test_ds, train_idx, val_idx, test_idx = self._split_dataset(
+            dataset, stock_boundaries
+        )
+
+        # 在训练集上 fit 特征标准化 (避免数据泄露)
+        train_features = features[train_idx]
+        self.builder.normalize_features(train_features, fit=True)
+        features = self.builder.normalize_features(features, fit=False)
+
+        # 在训练集上 fit 标签归一化
+        train_labels = labels[train_idx]
+        self.builder.normalize_labels(train_labels, fit=True)
+        labels = self.builder.normalize_labels(labels, fit=False)
+
+        # 用归一化后的数据重建 dataset
+        dataset = StockDataset(features, labels)
+        train_ds = Subset(dataset, train_idx)
+        val_ds = Subset(dataset, val_idx)
+        test_ds = Subset(dataset, test_idx)
 
         train_loader = DataLoader(train_ds, batch_size=self.config.batch_size, shuffle=True)
         val_loader = DataLoader(val_ds, batch_size=self.config.batch_size)
 
         # 创建模型
         self.model = self._create_model(num_features)
-        criterion = _create_criterion(self.config.loss_type)
+        criterion = _create_criterion(self.config.loss_type, self.config.huber_delta)
         optimizer = torch.optim.Adam(self.model.parameters(), lr=self.config.learning_rate)
 
         start_epoch = 0
@@ -226,13 +246,16 @@ class Trainer:
         # 加载 scaler
         self.builder.load_scaler(str(checkpoint_dir / "scaler.npz"))
 
-        # 构建数据（不做 fit）
-        features, labels, _, stock_boundaries = self.builder.build_all(symbols)
+        # 构建数据（不做内部标准化，由已加载的 scaler 处理）
+        features, labels, _, stock_boundaries = self.builder.build_all(
+            symbols, normalize_features=False
+        )
         features = self.builder.normalize_features(features, fit=False)
+        labels_normalized = self.builder.normalize_labels(labels, fit=False)
 
         num_features = features.shape[1]
-        dataset = StockDataset(features, labels)
-        _, _, test_ds = self._split_dataset(dataset, stock_boundaries)
+        dataset = StockDataset(features, labels_normalized)
+        _, _, test_ds, _, _, test_idx = self._split_dataset(dataset, stock_boundaries)
         test_loader = DataLoader(test_ds, batch_size=self.config.batch_size)
 
         # 加载最佳模型
@@ -247,25 +270,26 @@ class Trainer:
 
         # 预测
         all_preds = []
-        all_labels = []
+        all_labels_norm = []
         with torch.no_grad():
             for feat, lab in test_loader:
                 feat = feat.to(self.device)
                 pred = self.model(feat)
                 all_preds.append(pred.cpu().numpy())
-                all_labels.append(lab.numpy())
+                all_labels_norm.append(lab.numpy())
 
         all_preds = np.concatenate(all_preds)
-        all_labels = np.concatenate(all_labels)
+        all_labels_norm = np.concatenate(all_labels_norm)
 
-        # 回归指标
-        mse = float(np.mean((all_preds - all_labels) ** 2))
-        mae = float(np.mean(np.abs(all_preds - all_labels)))
+        # 反归一化，用原始收益率计算指标
+        all_preds_raw = self.builder.denormalize_labels(all_preds)
+        all_labels_raw = labels[test_idx]
+
+        mse = float(np.mean((all_preds_raw - all_labels_raw) ** 2))
+        mae = float(np.mean(np.abs(all_preds_raw - all_labels_raw)))
         rmse = float(np.sqrt(mse))
-        # 方向准确率: 预测与真实同号的比例
-        direction_acc = float(np.mean((all_preds * all_labels) > 0))
-        # 相关系数
-        corr = float(np.corrcoef(all_preds, all_labels)[0, 1]) if len(all_preds) > 1 else 0.0
+        direction_acc = float(np.mean((all_preds_raw * all_labels_raw) > 0))
+        corr = float(np.corrcoef(all_preds_raw, all_labels_raw)[0, 1]) if len(all_preds_raw) > 1 else 0.0
 
         result = {
             'mse': mse,
@@ -273,8 +297,8 @@ class Trainer:
             'mae': mae,
             'direction_accuracy': direction_acc,
             'correlation': corr,
-            'predictions': all_preds,
-            'true_labels': all_labels,
+            'predictions': all_preds_raw,
+            'true_labels': all_labels_raw,
         }
 
         logger.info(f"测试集 MSE={mse:.6f}, RMSE={rmse:.6f}, MAE={mae:.6f}")
@@ -294,7 +318,7 @@ class Trainer:
         """
         checkpoint_dir = Path(self.config.checkpoint_dir)
 
-        # 加载 scaler
+        # 加载 scaler (含标签归一化参数)
         self.builder.load_scaler(str(checkpoint_dir / "scaler.npz"))
 
         # 构建特征
@@ -329,13 +353,14 @@ class Trainer:
             self.model.load_state_dict(checkpoint['model_state_dict'])
         self.model.eval()
 
-        # 预测
+        # 预测 (模型输出为归一化空间，需反归一化)
         with torch.no_grad():
-            pred = self.model(sample).cpu().numpy()[0]
+            pred_norm = self.model(sample).cpu().numpy()[0]
 
-        direction = "涨" if pred > 0 else "跌"
+        pred_return = float(self.builder.denormalize_labels(np.array([pred_norm]))[0])
+        direction = "涨" if pred_return > 0 else "跌"
         return {
-            'predicted_return': float(pred),
+            'predicted_return': pred_return,
             'direction': direction,
         }
 

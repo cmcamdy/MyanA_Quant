@@ -20,6 +20,8 @@ class FeatureBuilder:
         self.storage_root = Path(config.data_dir)
         self._scaler_mean: Optional[np.ndarray] = None
         self._scaler_std: Optional[np.ndarray] = None
+        self._label_mean: Optional[float] = None
+        self._label_std: Optional[float] = None
         self._indicator_columns: Optional[List[str]] = None
 
     @property
@@ -114,12 +116,13 @@ class FeatureBuilder:
         return features[mask], valid_labels[mask]
 
     def build_all(
-        self, symbols: Optional[List[str]] = None
+        self, symbols: Optional[List[str]] = None, normalize_features: bool = True
     ) -> Tuple[np.ndarray, np.ndarray, List[str], List[Tuple[str, int, int]]]:
         """构建多只股票的样本
 
         Args:
             symbols: 股票列表，None 则遍历 data/ 下所有
+            normalize_features: 是否在内部做特征标准化 (训练时设为 False，由 Trainer 在训练集上 fit)
 
         Returns:
             (features, labels, symbol_per_sample, stock_boundaries)
@@ -156,8 +159,9 @@ class FeatureBuilder:
         labels = np.concatenate(all_labels, axis=0)
         logger.info(f"共 {len(symbols)} 只股票, 有效样本 {len(labels)}")
 
-        # 标准化
-        features = self.normalize_features(features)
+        # 标准化 (仅在 build_all 内部调用时做，训练时由 Trainer 控制)
+        if normalize_features:
+            features = self.normalize_features(features)
 
         return features, labels, all_symbols, stock_boundaries
 
@@ -177,12 +181,34 @@ class FeatureBuilder:
 
         return (features - self._scaler_mean) / self._scaler_std
 
+    def normalize_labels(self, labels: np.ndarray, fit: bool = True) -> np.ndarray:
+        """标签 z-score 归一化"""
+        if fit or self._label_mean is None:
+            self._label_mean = float(labels.mean())
+            self._label_std = float(labels.std())
+            if self._label_std < 1e-8:
+                self._label_std = 1.0
+        return ((labels - self._label_mean) / self._label_std).astype(np.float32)
+
+    def denormalize_labels(self, labels: np.ndarray) -> np.ndarray:
+        """标签反归一化"""
+        if self._label_mean is None or self._label_std is None:
+            raise ValueError("标签归一化参数未初始化，请先调用 normalize_labels(fit=True)")
+        return labels * self._label_std + self._label_mean
+
     def save_scaler(self, path: str):
-        """保存标准化参数"""
-        np.savez(path, mean=self._scaler_mean, std=self._scaler_std)
+        """保存标准化参数 (特征 + 标签)"""
+        data = {'mean': self._scaler_mean, 'std': self._scaler_std}
+        if self._label_mean is not None:
+            data['label_mean'] = np.array([self._label_mean])
+            data['label_std'] = np.array([self._label_std])
+        np.savez(path, **data)
 
     def load_scaler(self, path: str):
-        """加载标准化参数"""
+        """加载标准化参数 (特征 + 标签)"""
         data = np.load(path)
         self._scaler_mean = data['mean']
         self._scaler_std = data['std']
+        if 'label_mean' in data:
+            self._label_mean = float(data['label_mean'])
+            self._label_std = float(data['label_std'])

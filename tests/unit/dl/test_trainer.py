@@ -50,12 +50,15 @@ class TestTrainer:
             ("A", 0, 20), ("B", 20, 40), ("C", 40, 60), ("D", 60, 80), ("E", 80, 100),
         ]
 
-        train_ds, val_ds, test_ds = trainer._split_dataset(dataset, stock_boundaries)
+        train_ds, val_ds, test_ds, train_idx, val_idx, test_idx = trainer._split_dataset(dataset, stock_boundaries)
         total = len(train_ds) + len(val_ds) + len(test_ds)
         assert total == 100
         assert len(train_ds) > 0
         assert len(val_ds) > 0
         assert len(test_ds) > 0
+        assert len(train_idx) == len(train_ds)
+        assert len(val_idx) == len(val_ds)
+        assert len(test_idx) == len(test_ds)
 
     def test_train_epoch(self, trainer):
         from dl.dataset import StockDataset

@@ -42,17 +42,23 @@ class DLStrategy(Strategy):
         self._loaded = False
 
     def _ensure_loaded(self):
-        """延迟加载模型和 scaler"""
+        """延迟加载模型、scaler 和标签归一化参数"""
         if self._loaded:
             return
 
         checkpoint_dir = __import__('pathlib').Path(self.config.checkpoint_dir)
 
-        # 加载 scaler
+        # 加载 scaler (含标签归一化参数)
         scaler_path = checkpoint_dir / "scaler.npz"
         if not scaler_path.exists():
             raise FileNotFoundError(f"未找到 scaler: {scaler_path}，请先训练模型")
         self._builder.load_scaler(str(scaler_path))
+
+        # 检查标签归一化参数是否可用
+        if self._builder._label_mean is None:
+            raise ValueError(
+                "scaler.npz 中缺少标签归一化参数，请用新版训练代码重新训练模型"
+            )
 
         # 推断 num_features
         from pathlib import Path
@@ -109,10 +115,13 @@ class DLStrategy(Strategy):
         if feature_vector is None:
             return None
 
-        # 推理
+        # 推理 (模型输出为归一化空间)
         with torch.no_grad():
             sample = torch.from_numpy(feature_vector).unsqueeze(0).to(self._device)
-            pred_return = self._model(sample).cpu().numpy()[0]
+            pred_norm = self._model(sample).cpu().numpy()[0]
+
+        # 反归一化到原始收益率空间
+        pred_return = float(self._builder.denormalize_labels(np.array([pred_norm]))[0])
 
         # 生成信号
         if pred_return > self.buy_threshold:
