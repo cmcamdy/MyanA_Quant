@@ -16,7 +16,7 @@ class TestStockDataset:
     def sample_data(self):
         np.random.seed(42)
         features = np.random.randn(100, 31, 120).astype(np.float32)
-        labels = np.random.randint(0, 6, size=100).astype(np.int64)
+        labels = np.random.randn(100).astype(np.float32) * 0.02  # 收益率
         return features, labels
 
     def test_len(self, sample_data):
@@ -43,11 +43,4 @@ class TestStockDataset:
         features, labels = sample_data
         ds = StockDataset(features, labels)
         _, lab = ds[0]
-        assert lab.dtype == torch.int64
-
-    def test_label_range(self, sample_data):
-        features, labels = sample_data
-        ds = StockDataset(features, labels)
-        for i in range(len(ds)):
-            _, lab = ds[i]
-            assert 0 <= lab.item() <= 5
+        assert lab.dtype == torch.float32  # 回归: float32

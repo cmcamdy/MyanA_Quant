@@ -12,12 +12,12 @@ class StockDataset(Dataset):
 
     Args:
         features: [N, num_features, window] numpy 数组
-        labels: [N] numpy 数组
+        labels: [N] numpy 数组 (float32 收益率)
     """
 
     def __init__(self, features: np.ndarray, labels: np.ndarray):
         self.features = torch.from_numpy(features) if isinstance(features, np.ndarray) else features
-        self.labels = torch.from_numpy(labels).long() if isinstance(labels, np.ndarray) else labels.long()
+        self.labels = torch.from_numpy(labels).float() if isinstance(labels, np.ndarray) else labels.float()
 
     def __len__(self) -> int:
         return len(self.labels)

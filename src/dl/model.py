@@ -1,4 +1,4 @@
-"""价格涨跌预测网络: Transformer Decoder + 因果时序 Mask
+"""价格收益率预测网络: Transformer Decoder + 因果时序 Mask
 
 输入设计
 --------
@@ -27,22 +27,14 @@
 
 输出设计
 --------
-6 分类涨跌预测，输出 logits 经 softmax 得到概率分布:
+回归预测未来 horizon 天的收益率，输出单个连续值:
 
-  [0] 大跌 (<-5%)
-  [1] 中跌 (-5% ~ -2%)
-  [2] 小跌 (-2% ~ 0%)
-  [3] 小涨 (0% ~ 2%)
-  [4] 中涨 (2% ~ 5%)
-  [5] 大涨 (>5%)
-
-  取 Transformer 最后一个时间步的输出，经 LayerNorm + Dropout + Linear 映射到 6 维 logits。
+  取 Transformer 最后一个时间步的输出，经 LayerNorm + Dropout + Linear 映射到 1 维。
 
   示例输出:
-    logits = model(x)                    # [B, 6]
-    probs  = softmax(logits, dim=1)      # [B, 6]
-    pred   = probs.argmax(dim=1)         # [B] 预测分类
-    # 如 probs = [0.02, 0.11, 0.34, 0.38, 0.13, 0.02] → pred=3 (小涨)
+    pred = model(x)  # [B, 1]
+    pred = pred.squeeze(-1)  # [B] 预测收益率
+    # 如 pred = 0.015 → 预测上涨 1.5%
 """
 
 import math
@@ -72,13 +64,13 @@ class PositionalEncoding(nn.Module):
 
 
 class PricePredictor(nn.Module):
-    """Transformer Decoder 分类网络
+    """Transformer Decoder 回归网络
 
     结构:
       [B, num_features, window] → transpose → [B, window, num_features]
       Linear(num_features, d_model) → PositionalEncoding
       TransformerDecoderLayer × num_layers (带因果 mask)
-      取最后时间步 → LayerNorm → Dropout → Linear(d_model, num_classes)
+      取最后时间步 → LayerNorm → Dropout → Linear(d_model, 1)
 
     Args:
         num_features: 每个时间步的特征数 (31)
@@ -86,7 +78,6 @@ class PricePredictor(nn.Module):
         nhead: 多头注意力头数
         num_layers: Transformer Decoder 层数
         dim_feedforward: FFN 中间层维度
-        num_classes: 分类数
         dropout: Dropout 概率
         window: 时间步数 (用于预生成因果 mask)
     """
@@ -98,7 +89,6 @@ class PricePredictor(nn.Module):
         nhead: int = 4,
         num_layers: int = 2,
         dim_feedforward: int = 256,
-        num_classes: int = 6,
         dropout: float = 0.3,
         window: int = 120,
     ):
@@ -125,7 +115,7 @@ class PricePredictor(nn.Module):
         # 输出
         self.norm = nn.LayerNorm(d_model)
         self.drop = nn.Dropout(dropout)
-        self.fc_out = nn.Linear(d_model, num_classes)
+        self.fc_out = nn.Linear(d_model, 1)
 
         # 预生成因果 mask
         self._causal_mask: torch.Tensor | None = None
@@ -142,7 +132,7 @@ class PricePredictor(nn.Module):
             x: [B, num_features, window]
 
         Returns:
-            logits: [B, num_classes]
+            pred: [B] 预测收益率
         """
         # [B, num_features, window] → [B, window, num_features]
         x = x.transpose(1, 2)
@@ -164,6 +154,6 @@ class PricePredictor(nn.Module):
         # 输出
         out = self.norm(out)
         out = self.drop(out)
-        logits = self.fc_out(out)  # [B, num_classes]
+        pred = self.fc_out(out).squeeze(-1)  # [B]
 
-        return logits
+        return pred

@@ -10,7 +10,7 @@ from unittest.mock import patch, MagicMock
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent.parent / "src"))
 
 from dl.config import DLConfig
-from dl.trainer import Trainer
+from dl.trainer import Trainer, _create_criterion
 
 
 class TestTrainer:
@@ -34,15 +34,15 @@ class TestTrainer:
     def test_create_model(self, trainer):
         model = trainer._create_model(num_features=10)
         assert isinstance(model, torch.nn.Module)
-        # 输入 [1, 10, 30] → 输出 [1, 6]
+        # 回归: 输入 [1, 10, 30] → 输出 [1]
         x = torch.randn(1, 10, 30)
         out = model(x)
-        assert out.shape == (1, 6)
+        assert out.shape == (1,)
 
     def test_split_dataset(self, trainer):
         from dl.dataset import StockDataset
         features = np.random.randn(100, 10, 30).astype(np.float32)
-        labels = np.random.randint(0, 6, size=100).astype(np.int64)
+        labels = np.random.randn(100).astype(np.float32) * 0.02
         dataset = StockDataset(features, labels)
 
         # 模拟 5 只股票，每只 20 个样本
@@ -62,36 +62,33 @@ class TestTrainer:
         from torch.utils.data import DataLoader
 
         features = np.random.randn(50, 10, 30).astype(np.float32)
-        labels = np.random.randint(0, 6, size=50).astype(np.int64)
+        labels = np.random.randn(50).astype(np.float32) * 0.02
         dataset = StockDataset(features, labels)
         loader = DataLoader(dataset, batch_size=8)
 
         model = trainer._create_model(num_features=10)
         optimizer = torch.optim.Adam(model.parameters())
-        criterion = torch.nn.CrossEntropyLoss()
+        criterion = torch.nn.HuberLoss()
 
-        loss, acc = trainer._train_epoch(model, loader, optimizer, criterion)
+        loss = trainer._train_epoch(model, loader, optimizer, criterion)
         assert isinstance(loss, float)
-        assert isinstance(acc, float)
         assert loss > 0
-        assert 0 <= acc <= 1
 
     def test_evaluate(self, trainer):
         from dl.dataset import StockDataset
         from torch.utils.data import DataLoader
 
         features = np.random.randn(50, 10, 30).astype(np.float32)
-        labels = np.random.randint(0, 6, size=50).astype(np.int64)
+        labels = np.random.randn(50).astype(np.float32) * 0.02
         dataset = StockDataset(features, labels)
         loader = DataLoader(dataset, batch_size=8)
 
         model = trainer._create_model(num_features=10)
-        criterion = torch.nn.CrossEntropyLoss()
+        criterion = torch.nn.HuberLoss()
 
-        loss, acc = trainer._evaluate(model, loader, criterion)
+        loss = trainer._evaluate(model, loader, criterion)
         assert isinstance(loss, float)
-        assert isinstance(acc, float)
-        assert 0 <= acc <= 1
+        assert loss > 0
 
     def test_save_load_checkpoint(self, trainer, tmp_path):
         model = trainer._create_model(num_features=10)
@@ -108,3 +105,11 @@ class TestTrainer:
         checkpoint = torch.load(best_path, map_location='cpu', weights_only=False)
         assert checkpoint['epoch'] == 5
         assert checkpoint['best_val_loss'] == 1.5
+
+    def test_create_criterion(self):
+        assert isinstance(_create_criterion("mse"), torch.nn.MSELoss)
+        assert isinstance(_create_criterion("mae"), torch.nn.L1Loss)
+        assert isinstance(_create_criterion("huber"), torch.nn.HuberLoss)
+
+        with pytest.raises(ValueError):
+            _create_criterion("unknown")

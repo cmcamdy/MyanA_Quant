@@ -7,7 +7,7 @@ from typing import List, Optional, Tuple
 import numpy as np
 import pandas as pd
 
-from .config import CLASS_BOUNDS, DLConfig
+from .config import DLConfig
 
 logger = logging.getLogger("dl.feature_builder")
 
@@ -61,23 +61,17 @@ class FeatureBuilder:
         return result
 
     def _make_labels(self, close: pd.Series) -> np.ndarray:
-        """根据涨跌幅生成分类标签"""
-        # 未来 horizon 天的收益率
+        """计算未来 horizon 天的收益率作为回归标签"""
         future_close = close.shift(-self.config.horizon)
-        returns = (future_close - close) / close
-        returns = returns.values
-
-        labels = np.full(len(returns), -1, dtype=np.int64)
-        for i, (lo, hi) in enumerate(zip(CLASS_BOUNDS[:-1], CLASS_BOUNDS[1:])):
-            mask = (returns > lo) & (returns <= hi)
-            labels[mask] = i
-        return labels
+        returns = ((future_close - close) / close).values.astype(np.float32)
+        return returns
 
     def build_stock(self, symbol: str) -> Optional[Tuple[np.ndarray, np.ndarray]]:
         """构建单只股票的全部样本
 
         Returns:
             (features: [N, num_features, window], labels: [N]) 或 None
+            labels 为未来 horizon 天的收益率 (float32)
         """
         df = self._load_parquet(symbol)
         if df is None:
@@ -104,15 +98,15 @@ class FeatureBuilder:
             return None
 
         features = np.zeros((n_samples, len(feature_cols), window), dtype=np.float32)
-        valid_labels = np.zeros(n_samples, dtype=np.int64)
+        valid_labels = np.zeros(n_samples, dtype=np.float32)
 
         for i in range(n_samples):
             t = i + window
             features[i] = values[i:t].T
             valid_labels[i] = labels[t - 1]
 
-        # 过滤无效标签
-        mask = valid_labels >= 0
+        # 过滤 NaN 标签 (尾部 horizon 个样本无未来收益)
+        mask = ~np.isnan(valid_labels)
         if mask.sum() == 0:
             logger.warning(f"{symbol}: 无有效标签")
             return None

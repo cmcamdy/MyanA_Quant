@@ -16,9 +16,8 @@ import torch
 import torch.nn as nn
 from tqdm import tqdm
 from torch.utils.data import DataLoader, Subset
-from sklearn.metrics import classification_report, confusion_matrix
 
-from .config import CLASS_LABELS, DLConfig
+from .config import DLConfig
 from .dataset import StockDataset
 from .feature_builder import FeatureBuilder
 from .model import PricePredictor
@@ -26,8 +25,19 @@ from .model import PricePredictor
 logger = logging.getLogger("dl.trainer")
 
 
+def _create_criterion(loss_type: str) -> nn.Module:
+    if loss_type == "mse":
+        return nn.MSELoss()
+    elif loss_type == "mae":
+        return nn.L1Loss()
+    elif loss_type == "huber":
+        return nn.HuberLoss(delta=0.01)
+    else:
+        raise ValueError(f"未知 loss_type: {loss_type}, 可选: mse, mae, huber")
+
+
 class Trainer:
-    """深度学习训练器"""
+    """深度学习训练器 (回归模式)"""
 
     def __init__(self, config: DLConfig):
         self.config = config
@@ -43,22 +53,13 @@ class Trainer:
             nhead=self.config.nhead,
             num_layers=self.config.num_layers,
             dim_feedforward=self.config.dim_feedforward,
-            num_classes=self.config.num_classes,
             dropout=self.config.dropout,
             window=self.config.window,
         )
         return model.to(self.device)
 
     def _split_dataset(self, dataset: StockDataset, stock_boundaries: List[Tuple[str, int, int]]):
-        """每只股票内部按时间顺序划分 train/val/test
-
-        对每只股票，按时间顺序取前 train_ratio 为训练，中间 val_ratio 为验证，剩余为测试。
-        所有股票都参与三个集合，保证样本多样性。
-
-        Args:
-            dataset: 完整数据集
-            stock_boundaries: [(symbol, start_idx, end_idx), ...]
-        """
+        """每只股票内部按时间顺序划分 train/val/test"""
         train_indices = []
         val_indices = []
         test_indices = []
@@ -84,7 +85,6 @@ class Trainer:
     def _train_epoch(self, model: nn.Module, loader: DataLoader, optimizer, criterion, pbar=None):
         model.train()
         total_loss = 0.0
-        correct = 0
         total = 0
 
         for features, labels in loader:
@@ -92,48 +92,45 @@ class Trainer:
             labels = labels.to(self.device)
 
             optimizer.zero_grad()
-            logits = model(features)
-            loss = criterion(logits, labels)
+            pred = model(features)
+            loss = criterion(pred, labels)
             loss.backward()
             optimizer.step()
 
             total_loss += loss.item() * features.size(0)
-            correct += (logits.argmax(dim=1) == labels).sum().item()
             total += features.size(0)
 
             if pbar is not None:
-                pbar.set_postfix(loss=f"{total_loss / total:.4f}", acc=f"{correct / total:.3f}")
+                pbar.set_postfix(loss=f"{total_loss / total:.6f}")
                 pbar.update(features.size(0))
 
-        return total_loss / total, correct / total
+        return total_loss / total
 
     @torch.no_grad()
     def _evaluate(self, model: nn.Module, loader: DataLoader, criterion, pbar=None):
         model.eval()
         total_loss = 0.0
-        correct = 0
         total = 0
 
         for features, labels in loader:
             features = features.to(self.device)
             labels = labels.to(self.device)
 
-            logits = model(features)
-            loss = criterion(logits, labels)
+            pred = model(features)
+            loss = criterion(pred, labels)
 
             total_loss += loss.item() * features.size(0)
-            correct += (logits.argmax(dim=1) == labels).sum().item()
             total += features.size(0)
 
             if pbar is not None:
-                pbar.set_postfix(loss=f"{total_loss / total:.4f}", acc=f"{correct / total:.3f}")
+                pbar.set_postfix(loss=f"{total_loss / total:.6f}")
                 pbar.update(features.size(0))
 
-        return total_loss / total, correct / total
+        return total_loss / total
 
     def train(self, symbols: Optional[List[str]] = None):
         """完整训练流程"""
-        logger.info(f"开始训练, 设备: {self.device}")
+        logger.info(f"开始训练 (回归模式), 设备: {self.device}")
 
         # 构建数据
         features, labels, _, stock_boundaries = self.builder.build_all(symbols)
@@ -149,7 +146,7 @@ class Trainer:
 
         # 创建模型
         self.model = self._create_model(num_features)
-        criterion = nn.CrossEntropyLoss()
+        criterion = _create_criterion(self.config.loss_type)
         optimizer = torch.optim.Adam(self.model.parameters(), lr=self.config.learning_rate)
 
         start_epoch = 0
@@ -168,23 +165,19 @@ class Trainer:
             # 训练
             train_total = len(train_loader.dataset)
             train_pbar = tqdm(total=train_total, desc=f"Epoch {epoch + 1} 训练", leave=False, unit="样本")
-            train_loss, train_acc = self._train_epoch(self.model, train_loader, optimizer, criterion, pbar=train_pbar)
+            train_loss = self._train_epoch(self.model, train_loader, optimizer, criterion, pbar=train_pbar)
             train_pbar.close()
 
             # 验证
             val_total = len(val_loader.dataset)
             val_pbar = tqdm(total=val_total, desc=f"Epoch {epoch + 1} 验证", leave=False, unit="样本")
-            val_loss, val_acc = self._evaluate(self.model, val_loader, criterion, pbar=val_pbar)
+            val_loss = self._evaluate(self.model, val_loader, criterion, pbar=val_pbar)
             val_pbar.close()
 
-            epoch_pbar.set_postfix(
-                t_loss=f"{train_loss:.4f}", t_acc=f"{train_acc:.3f}",
-                v_loss=f"{val_loss:.4f}", v_acc=f"{val_acc:.3f}",
-            )
+            epoch_pbar.set_postfix(t_loss=f"{train_loss:.6f}", v_loss=f"{val_loss:.6f}")
             logger.info(
                 f"Epoch {epoch + 1}/{self.config.epochs} | "
-                f"train_loss={train_loss:.4f} train_acc={train_acc:.3f} | "
-                f"val_loss={val_loss:.4f} val_acc={val_acc:.3f}"
+                f"train_loss={train_loss:.6f} | val_loss={val_loss:.6f}"
             )
 
             # 保存最佳模型
@@ -206,7 +199,7 @@ class Trainer:
                 break
 
         elapsed = time.time() - start_time
-        logger.info(f"训练完成, 耗时 {elapsed:.0f}s, 最佳 val_loss={self._best_val_loss:.4f}")
+        logger.info(f"训练完成, 耗时 {elapsed:.0f}s, 最佳 val_loss={self._best_val_loss:.6f}")
 
         # 保存 scaler
         self.builder.save_scaler(str(checkpoint_dir / "scaler.npz"))
@@ -258,34 +251,34 @@ class Trainer:
         with torch.no_grad():
             for feat, lab in test_loader:
                 feat = feat.to(self.device)
-                logits = self.model(feat)
-                preds = logits.argmax(dim=1)
-                all_preds.append(preds.cpu().numpy())
+                pred = self.model(feat)
+                all_preds.append(pred.cpu().numpy())
                 all_labels.append(lab.numpy())
 
         all_preds = np.concatenate(all_preds)
         all_labels = np.concatenate(all_labels)
 
-        # 计算指标
-        report = classification_report(
-            all_labels, all_preds,
-            target_names=CLASS_LABELS,
-            zero_division=0,
-        )
-        cm = confusion_matrix(all_labels, all_preds)
-        accuracy = (all_preds == all_labels).mean()
+        # 回归指标
+        mse = float(np.mean((all_preds - all_labels) ** 2))
+        mae = float(np.mean(np.abs(all_preds - all_labels)))
+        rmse = float(np.sqrt(mse))
+        # 方向准确率: 预测与真实同号的比例
+        direction_acc = float(np.mean((all_preds * all_labels) > 0))
+        # 相关系数
+        corr = float(np.corrcoef(all_preds, all_labels)[0, 1]) if len(all_preds) > 1 else 0.0
 
         result = {
-            'accuracy': accuracy,
-            'confusion_matrix': cm,
-            'classification_report': report,
+            'mse': mse,
+            'rmse': rmse,
+            'mae': mae,
+            'direction_accuracy': direction_acc,
+            'correlation': corr,
             'predictions': all_preds,
             'true_labels': all_labels,
         }
 
-        logger.info(f"测试集准确率: {accuracy:.4f}")
-        logger.info(f"\n{report}")
-        logger.info(f"混淆矩阵:\n{cm}")
+        logger.info(f"测试集 MSE={mse:.6f}, RMSE={rmse:.6f}, MAE={mae:.6f}")
+        logger.info(f"方向准确率={direction_acc:.4f}, 相关系数={corr:.4f}")
 
         return result
 
@@ -297,7 +290,7 @@ class Trainer:
             date: 指定日期（None 则用最新数据）
 
         Returns:
-            {'probabilities': [...], 'predicted_class': int, 'label': str}
+            {'predicted_return': float, 'direction': str}
         """
         checkpoint_dir = Path(self.config.checkpoint_dir)
 
@@ -338,14 +331,12 @@ class Trainer:
 
         # 预测
         with torch.no_grad():
-            logits = self.model(sample)
-            probs = torch.softmax(logits, dim=1).cpu().numpy()[0]
+            pred = self.model(sample).cpu().numpy()[0]
 
-        pred_class = int(probs.argmax())
+        direction = "涨" if pred > 0 else "跌"
         return {
-            'probabilities': probs.tolist(),
-            'predicted_class': pred_class,
-            'label': CLASS_LABELS[pred_class],
+            'predicted_return': float(pred),
+            'direction': direction,
         }
 
     def _save_checkpoint(self, epoch: int, is_best: bool):
@@ -380,7 +371,7 @@ class Trainer:
 
         start_epoch = checkpoint['epoch'] + 1
         best_val_loss = checkpoint.get('best_val_loss', float('inf'))
-        logger.info(f"从 epoch {start_epoch} 续训, best_val_loss={best_val_loss:.4f}")
+        logger.info(f"从 epoch {start_epoch} 续训, best_val_loss={best_val_loss:.6f}")
         return start_epoch, best_val_loss
 
     def _save_config_meta(self, checkpoint_dir: Path, symbols):
@@ -389,8 +380,8 @@ class Trainer:
             'window': self.config.window,
             'horizon': self.config.horizon,
             'hidden_dim': self.config.hidden_dim,
-            'num_classes': self.config.num_classes,
             'num_features': self.builder.num_features,
+            'loss_type': self.config.loss_type,
             'train_symbols': symbols or 'all',
         }
         path = checkpoint_dir / "train_meta.json"

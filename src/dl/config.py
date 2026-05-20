@@ -1,4 +1,4 @@
-"""深度学习涨跌预测模块配置"""
+"""深度学习收益率预测模块配置"""
 
 from dataclasses import dataclass, field
 from typing import List, Optional
@@ -25,19 +25,6 @@ DEFAULT_INDICATORS = [
     ('sar', {}),
 ]
 
-# 涨跌分类标签
-CLASS_LABELS = [
-    '大跌 (<-5%)',
-    '中跌 (-5%~-2%)',
-    '小跌 (-2%~0%)',
-    '小涨 (0%~2%)',
-    '中涨 (2%~5%)',
-    '大涨 (>5%)',
-]
-
-# 涨跌幅区间边界
-CLASS_BOUNDS = [-float('inf'), -0.05, -0.02, 0.0, 0.02, 0.05, float('inf')]
-
 
 @dataclass
 class DLConfig:
@@ -53,7 +40,6 @@ class DLConfig:
 
     # 模型
     hidden_dim: int = 256
-    num_classes: int = 6
     dropout: float = 0.3
 
     # Transformer
@@ -67,6 +53,7 @@ class DLConfig:
     learning_rate: float = 1e-3
     epochs: int = 50
     early_stopping_patience: int = 5
+    loss_type: str = "huber"  # "mse" | "huber" | "mae"
 
     # 路径
     checkpoint_dir: str = "./checkpoints"
@@ -77,6 +64,10 @@ class DLConfig:
     # 增量训练
     incremental: bool = False
     incremental_lr_factor: float = 0.1
+
+    # 回测信号阈值
+    buy_threshold: float = 0.005   # 预测收益率 > 此值生成 BUY
+    sell_threshold: float = -0.005  # 预测收益率 < 此值生成 SELL
 
     def get_indicators(self):
         return self.indicators if self.indicators is not None else DEFAULT_INDICATORS

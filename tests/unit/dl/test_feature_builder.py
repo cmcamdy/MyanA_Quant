@@ -42,8 +42,14 @@ class TestFeatureBuilder:
         close = pd.Series([100, 101, 103, 99, 95, 105, 108, 107, 96, 102], dtype=float)
         labels = builder._make_labels(close)
         assert len(labels) == len(close)
-        assert all(l >= -1 for l in labels)
-        assert all(l <= 5 for l in labels)
+        # 回归标签: 连续收益率
+        assert labels.dtype == np.float32
+
+    def test_make_labels_values(self, builder):
+        close = pd.Series([100.0, 110.0], dtype=float)
+        labels = builder._make_labels(close)
+        # horizon=1, close[0]=100, future_close[0]=110, return=0.1
+        assert abs(labels[0] - 0.1) < 1e-5
 
     def test_make_labels_horizon(self):
         config = DLConfig(window=60, horizon=5)
@@ -51,9 +57,9 @@ class TestFeatureBuilder:
         close = pd.Series([100, 101, 103, 99, 95, 105, 108, 107, 96, 102, 110, 115], dtype=float)
         labels = builder._make_labels(close)
         assert len(labels) == len(close)
-        # 末尾 horizon 个标签应为 -1（无未来数据）
+        # 末尾 horizon 个标签应为 NaN（无未来数据）
         for i in range(len(labels) - 5, len(labels)):
-            assert labels[i] == -1
+            assert np.isnan(labels[i])
 
     def test_normalize_features(self, builder):
         np.random.seed(42)
@@ -95,8 +101,8 @@ class TestFeatureBuilder:
         assert features.shape[1] > 6  # 原始6列 + 指标列
         assert features.shape[2] == 60  # window
         assert len(labels) == features.shape[0]
-        assert all(l >= 0 for l in labels)
-        assert all(l <= 5 for l in labels)
+        # 回归标签: float32 连续值
+        assert labels.dtype == np.float32
 
     @patch.object(FeatureBuilder, '_load_parquet')
     def test_build_stock_insufficient_data(self, mock_load, builder):
